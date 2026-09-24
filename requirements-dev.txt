@@ -1,0 +1,6 @@
+-r requirements.txt
+-r relay/requirements.txt
+pytest>=8
+py-solc-x>=2.0
+eth-tester[py-evm]>=0.12.0b1
+pyflakes

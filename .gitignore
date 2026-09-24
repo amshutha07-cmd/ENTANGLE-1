@@ -1,0 +1,35 @@
+# environments / caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# secrets - never commit
+.env
+storage_targets.json
+*.ansx_id
+identities/
+.ansx_vault/
+
+# build output
+build/
+dist/
+*.dmg
+*.log
+libshatter.so
+libshatter.dylib
+shatter.dll
+*.obj
+*.exp
+*.lib
+
+# runtime data
+vault_shards/
+outbox/
+
+# relay server data (names, waiting files)
+relay_data/

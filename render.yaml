@@ -1,0 +1,19 @@
+# Render blueprint for the ANSX relay. A persistent disk is REQUIRED: it holds the SQLite database
+# and in-flight blobs (Render's free tier has no disk, so use a paid plan or Fly.io/any VPS with Docker).
+services:
+  - type: web
+    name: ansx-relay
+    runtime: docker
+    dockerfilePath: ./relay/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /
+    disk:
+      name: ansx-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: ANSX_RELAY_DATA
+        value: /data
+      - key: ANSX_MAX_TRANSFER_MB
+        value: "128"
