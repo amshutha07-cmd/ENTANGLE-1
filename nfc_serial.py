@@ -3,6 +3,13 @@ import serial
 import serial.tools.list_ports
 import time
 
+class ReaderError(Exception):
+    """The card reader stopped responding (unplugged, cable glitch, board reset). The message is safe to show to a user."""
+
+
+READER_LOST = ("The card reader lost its connection. Unplug the USB cable, plug it back in, wait 3 seconds, and try again. "
+               "(If it keeps happening: use a data-capable cable, and close the Arduino Serial Monitor if it is open.)")
+
 # Boards/adapters commonly used with the PN532 sketch (USB vendor ids: Arduino, CH340/CH341, CP210x, FTDI)
 _KNOWN_VIDS = {0x2341, 0x2A03, 0x1A86, 0x10C4, 0x0403}
 _NAME_HINTS = ("arduino", "ch340", "ch341", "cp210", "ftdi", "usb serial", "usb-serial", "wch")
@@ -72,7 +79,23 @@ class HardwareNFCBridge:
             print(f"[NFC Bridge] Failed to connect: {e}")
 
     def is_connected(self) -> bool:
-        return self.ser is not None and self.ser.is_open
+        if self.ser is None or not self.ser.is_open:
+            return False
+        try:
+            self.ser.in_waiting                       # raises if the USB device was unplugged or reset
+            return True
+        except (serial.SerialException, OSError):
+            self._drop()
+            return False
+
+    def _drop(self) -> None:
+        """The device vanished: forget it, so the next attempt reconnects from scratch instead of reusing a dead port."""
+        try:
+            if self.ser is not None:
+                self.ser.close()
+        except Exception:
+            pass
+        self.ser = None
 
     def close(self):
         try:
@@ -96,9 +119,14 @@ class HardwareNFCBridge:
         start_time = time.time()
         while (time.time() - start_time) < timeout:
             # Re-send the WRITE command each loop so Arduino waits for the next tap
-            self.ser.reset_input_buffer()
-            cmd = f"WRITE:{hex_payload}\n"
-            self.ser.write(cmd.encode())
+            try:
+                self.ser.reset_input_buffer()
+                cmd = f"WRITE:{hex_payload}\n"
+                self.ser.write(cmd.encode())
+            except (serial.SerialException, OSError) as e:
+                print(f"[NFC Bridge] Reader disconnected while writing: {e}")
+                self._drop()
+                raise ReaderError(READER_LOST) from e
             print(f"[NFC Bridge] WRITE command sent, waiting for card tap...")
 
             attempt_start = time.time()
@@ -115,7 +143,8 @@ class HardwareNFCBridge:
                         # WAITING_FOR_CARD / other status messages: keep waiting
                 except (serial.SerialException, OSError) as e:
                     print(f"[NFC Bridge] Serial error during write: {e}")
-                    return False
+                    self._drop()
+                    raise ReaderError(READER_LOST) from e
                 time.sleep(0.1)
 
         print("[NFC Bridge] Timeout waiting for Arduino")
@@ -129,8 +158,13 @@ class HardwareNFCBridge:
         if not self.is_connected():
             return None
 
-        self.ser.reset_input_buffer()
-        self.ser.write(b"READ\n")
+        try:
+            self.ser.reset_input_buffer()
+            self.ser.write(b"READ\n")
+        except (serial.SerialException, OSError) as e:
+            print(f"[NFC Bridge] Reader disconnected while reading: {e}")
+            self._drop()
+            raise ReaderError(READER_LOST) from e
 
         start_time = time.time()
         while (time.time() - start_time) < timeout:
@@ -150,7 +184,8 @@ class HardwareNFCBridge:
                         return None
             except (serial.SerialException, OSError) as e:
                 print(f"[NFC Bridge] Serial error during read: {e}")
-                return None
+                self._drop()
+                raise ReaderError(READER_LOST) from e
             time.sleep(0.1)
         print("[NFC Bridge] Timeout waiting for Arduino")
         return None

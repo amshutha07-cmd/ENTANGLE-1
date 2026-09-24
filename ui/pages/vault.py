@@ -178,7 +178,8 @@ class VaultPage(Page):
     def _restored(self, info: dict) -> None:
         self._done()
         self.ctl.after_restore(os.path.basename(info["path"]))
-        self.result.set(f"Restored to {info['path']}", "success")
+        note, kind = self.ctl.signature_note(info)
+        self.result.set(f"Restored to {info['path']}" + ("" if kind == "success" else f". {note}"), kind)
         self.result.show()
         self.ctl.toast.emit("File restored to your Downloads folder.", "success")
         open_folder(info["path"])

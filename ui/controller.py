@@ -152,8 +152,30 @@ class AppController(QObject):
                 bridge = nfc_serial.get_shared_bridge()
                 if not bridge.is_connected():
                     raise IdentityError("No card reader found. Plug it in (or choose the passphrase option).")
+                # Read before writing: if this card already opens an identity here, overwriting it would lock that
+                # identity out for good. A card that cannot be read cannot be written either, so this is no extra hurdle.
+                try:
+                    current = bridge.read_payload_from_tag(timeout=45)
+                except nfc_serial.ReaderError as exc:
+                    raise IdentityError(str(exc)) from exc
+                if cancelled():
+                    raise vault_service.Cancelled("Cancelled.")
+                if current is None:
+                    raise IdentityError("Could not read the card. Hold a Mifare Classic card flat on the reader and try again.")
+                progress("Checking the card is not already in use…", 20)
+                taken = SecurityCore.identities_unlocked_by(current)
+                if taken:
+                    who = ", ".join(f"'{t}'" for t in taken)
+                    raise IdentityError(
+                        f"This card already unlocks {who}. Writing a new identity to it would erase that key and lock "
+                        f"{who} out for good. Use a different blank card.")
+                progress("Writing your card… keep it on the reader", 30)
                 secret = new_card_secret()
-                if not bridge.write_payload_to_tag(secret, timeout=45):
+                try:
+                    written = bridge.write_payload_to_tag(secret, timeout=45)
+                except nfc_serial.ReaderError as exc:
+                    raise IdentityError(str(exc)) from exc
+                if not written:
                     raise IdentityError("Could not write to the card. Keep it on the reader and try again.")
             progress("Creating your encryption keys… (a few seconds)", 45)
             SecurityCore.establish_identity(name, secret, auth=auth)
@@ -169,7 +191,10 @@ class AppController(QObject):
                 bridge = nfc_serial.get_shared_bridge()
                 if not bridge.is_connected():
                     raise IdentityError("No card reader found. Plug it in and try again.")
-                secret = bridge.read_payload_from_tag(timeout=30) or ""
+                try:
+                    secret = bridge.read_payload_from_tag(timeout=30) or ""
+                except nfc_serial.ReaderError as exc:
+                    raise IdentityError(str(exc)) from exc
                 if cancelled():
                     raise vault_service.Cancelled("Cancelled.")
                 if not secret:
@@ -357,18 +382,53 @@ class AppController(QObject):
     def make_restore_job(self, entry: dict, out_path: Optional[str] = None) -> Job:
         """Rebuild one of my own files. Default destination: Downloads/A.N.Sx Vault/<original name>."""
         return self._make_rebuild_job(entry["ghost_map_path"], out_path, "restore",
-                                      fallback_name=entry.get("original_filename", ""))
+                                      fallback_name=entry.get("original_filename", ""), expected_sender=self.operator)
 
     def make_open_package_job(self, package_path: str) -> Job:
         """Open a package file that arrived outside the relay (USB stick, chat, e-mail)."""
         return self._make_rebuild_job(package_path, None, "open-package")
 
-    def _make_rebuild_job(self, package_path: str, out_path: Optional[str], name: str, fallback_name: str = "") -> Job:
+    @staticmethod
+    def sender_key(name: str) -> Optional[tuple]:
+        """
+        Key to check a package signature against: an identity here or a saved contact, else the relay's key for that
+        name, saved as UNVERIFIED on first use (the same rule as sending; a later different key is refused).
+        """
+        known = vault_service.known_sender_key(name)
+        if known:
+            return known
+        try:
+            import web3_bridge
+            return web3_bridge.get_web3_engine().resolve_trusted_public_key(name), "unverified"
+        except Exception as exc:
+            logger.info("No key found for signer %s: %s", name, exc)
+            return None
+
+    @staticmethod
+    def signature_note(info: dict) -> tuple[str, str]:
+        """(sentence, banner kind) describing who signed a package that was just opened."""
+        signer, status = info.get("signer", ""), info.get("signature", "unsigned")
+        if status == "verified":
+            return f"Signed by {signer}, whose key you verified.", "success"
+        if status == "local":
+            return f"Signed by {signer}, an identity on this computer.", "success"
+        if status == "unverified":
+            return (f"Signed by {signer}. You haven't verified their key yet, so compare fingerprints before trusting "
+                    "this file.", "warning")
+        if status == "unknown":
+            return (f"It says it is from {signer}, but no key for them could be found, so the signature could not be "
+                    "checked.", "warning")
+        return ("This package has no sender signature (it was made by an older version), so who made it cannot be "
+                "confirmed.", "warning")
+
+    def _make_rebuild_job(self, package_path: str, out_path: Optional[str], name: str, fallback_name: str = "",
+                          expected_sender: Optional[str] = None) -> Job:
         private_pem = self.identity().get("private_key", "")
 
         def work(progress: ProgressFn, cancelled: Callable[[], bool]) -> dict:
             target = out_path or os.path.join(paths.tmp_dir(), "rebuild_" + secrets.token_hex(6))
-            info = vault_service.reconstruct(package_path, private_pem, target, progress=progress)
+            info = vault_service.reconstruct(package_path, private_pem, target, progress=progress,
+                                             lookup=self.sender_key, expected_sender=expected_sender)
             if not out_path:
                 final = vault_service.unique_path(
                     paths.downloads_dir(), vault_service.safe_filename(info.get("original_file") or fallback_name))
@@ -456,7 +516,8 @@ class AppController(QObject):
             try:
                 info = vault_service.reconstruct(
                     package, private_pem, target,
-                    progress=lambda label, pct: progress(label, 55 + int(pct * 0.45)))
+                    progress=lambda label, pct: progress(label, 55 + int(pct * 0.45)),
+                    lookup=self.sender_key, expected_sender=item.get("from") or None)
             finally:
                 _silent_remove(package)
             if save_path:

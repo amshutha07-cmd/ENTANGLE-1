@@ -68,7 +68,6 @@ class ContactsPage(Page):
         left.body.addWidget(self.list)
         self.empty = EmptyState("users", "No one yet", "Press “Refresh from relay” to find people, or import an ID file someone sent you.")
         left.body.addWidget(self.empty)
-        row.addWidget(left, 5)
 
         self.detail = Card(padding=20, spacing=10)
         head = QHBoxLayout()
@@ -96,7 +95,9 @@ class ContactsPage(Page):
         self.detail.body.addWidget(self.verify_btn)
         self.detail.body.addWidget(self.remove_btn, 0, Qt.AlignmentFlag.AlignLeft)
         self.detail.body.addStretch()
+        # Details (with their buttons) on the left: notifications stack up in the window's bottom-right corner.
         row.addWidget(self.detail, 6)
+        row.addWidget(left, 5)
         self.root.addLayout(row)
         self.root.addStretch(1)
 

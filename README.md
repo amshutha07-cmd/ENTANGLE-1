@@ -30,6 +30,7 @@ can never read it. The receiver decides whether to accept, and can check that th
 pip install -r requirements.txt
 python build_engine.py                                   # builds the native encryption engine for this OS
 python run_relay.py --tunnel                            # a relay + free public https address (needs cloudflared)
+                                                         # or --tailscale for a permanent address (needs Tailscale Funnel)
 python main.py                                           # then: Settings → Cloud storage to add your buckets
 ```
 

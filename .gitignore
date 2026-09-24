@@ -23,6 +23,7 @@ dist/
 libshatter.so
 libshatter.dylib
 shatter.dll
+/*.dll
 *.obj
 *.exp
 *.lib
