@@ -173,7 +173,10 @@ class SettingsPage(Page):
         self.root.addStretch(1)
 
         self._loading = True
-        ctl.session_started.connect(lambda _n: self.on_show())
+        ctl.session_started.connect(self._session_started)
+
+    def _session_started(self, _name: str) -> None:
+        self.on_show()
 
     def on_show(self) -> None:
         self._loading = True

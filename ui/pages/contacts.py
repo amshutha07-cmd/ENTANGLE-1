@@ -105,7 +105,10 @@ class ContactsPage(Page):
         self.root.addStretch(1)
 
         ctl.contacts_changed.connect(self.refresh)
-        ctl.session_started.connect(lambda _n: self.refresh())
+        ctl.session_started.connect(self._session_started)
+
+    def _session_started(self, _name: str) -> None:
+        self.refresh()
 
     def on_show(self) -> None:
         self.refresh()

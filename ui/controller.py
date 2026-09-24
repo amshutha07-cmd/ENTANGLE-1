@@ -92,6 +92,8 @@ class AppController(QObject):
     contacts_changed = pyqtSignal()
     activity_changed = pyqtSignal()
     toast = pyqtSignal(str, str)                       # message, kind: info|success|warning|error
+    work_progress = pyqtSignal(str, str, str, int)     # job key, page doing it, label, percent (real work only)
+    work_done = pyqtSignal(str)                        # job key
 
     def __init__(self) -> None:
         super().__init__()
@@ -119,10 +121,19 @@ class AppController(QObject):
             job.cancelled.connect(on_cancel)
         for sig in (job.succeeded, job.failed, job.cancelled):
             sig.connect(lambda *_a, j=job: self._jobs.discard(j))
+        if job.name in self.WORK_JOBS:                      # visible everywhere, not only on the page that started it
+            key, page = str(id(job)), getattr(job, "page", "") or self.WORK_PAGES.get(job.name, "home")
+            job.progress.connect(lambda label, pct, k=key, p=page: self.work_progress.emit(k, p, label, pct))
+            for sig in (job.succeeded, job.failed, job.cancelled):
+                sig.connect(lambda *_a, k=key: self.work_done.emit(k))
+            self.work_progress.emit(key, page, self.WORK_START.get(job.name, "Working…"), 0)
         job.start()
         return job
 
     WORK_JOBS = ("protect", "send", "accept", "restore", "open-package")
+    WORK_PAGES = {"protect": "vault", "restore": "vault", "send": "send", "accept": "inbox", "open-package": "inbox"}
+    WORK_START = {"protect": "Protecting…", "restore": "Restoring…", "send": "Sending…", "accept": "Receiving…",
+                  "open-package": "Opening a package…"}
 
     def busy(self) -> bool:
         """Is work someone would lose still running (protecting, sending, receiving, restoring)? Background lookups

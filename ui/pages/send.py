@@ -1,6 +1,7 @@
 """ui/pages/send.py — send a protected file in three clear steps: file → person → review."""
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
@@ -72,9 +73,19 @@ class SendPage(Page):
         self.files.itemDoubleClicked.connect(lambda _i: self._next())
         l0.addWidget(self.files)
         self.files_empty = EmptyState("shield", "Nothing to send yet",
-                                      "Protect a file first, then come back here to send it.", "Protect a file",
-                                      lambda: self.navigate.emit("vault"))
+                                      "Choose a file: it is protected first, then you pick who gets it.",
+                                      "Choose a file…", self._pick_new_file)
         l0.addWidget(self.files_empty)
+        self.new_file_btn = Button("Protect and send a new file…", "ghost", "plus", "sm")
+        self.new_file_btn.setToolTip("Pick any file: it is protected first, then you choose who gets it")
+        self.new_file_btn.clicked.connect(self._pick_new_file)
+        l0.addWidget(self.new_file_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.prep = ProgressPanel()                          # protecting a new file before sending it
+        self.prep.cancel_clicked.connect(lambda: self._job is not None and self._job.cancel())
+        l0.addWidget(self.prep)
+        self.prep_error = Banner("", "danger")
+        self.prep_error.hide()
+        l0.addWidget(self.prep_error)
         self.stack.addWidget(s0)
 
         # step 1 — person
@@ -245,6 +256,7 @@ class SendPage(Page):
         _fit_rows(self.files)
         self.files.setVisible(bool(entries))
         self.files_heading.setVisible(bool(everything))
+        self.new_file_btn.setVisible(bool(everything))       # with no files, the empty state offers the same
         self.files_empty.setVisible(not entries)
         if everything and not entries:
             self.files_empty.set_text("No match", f"None of your files is called “{needle}”.")
@@ -300,6 +312,53 @@ class SendPage(Page):
         self._update_nav()
 
     # ── wizard navigation ────────────────────────────────────────────────────
+    # ── protect a new file, then carry on sending it ─────────────────────────
+    def _pick_new_file(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file to send")
+        if path:
+            self.protect_and_continue(path)
+
+    def protect_and_continue(self, path: str) -> None:
+        """Protect `path` right here, then go straight to choosing who gets it (one flow instead of two pages)."""
+        if self._job is not None:
+            return
+        self._go(0)
+        self.prep_error.hide()
+        self.new_file_btn.setEnabled(False)
+        self.prep.start(f"Protecting {os.path.basename(path)} before sending")
+        job = self.ctl.make_protect_job(path)
+        job.page = "send"                                   # progress elsewhere leads back here, not to Protect
+        self._job = job
+        self._update_nav()
+        self.ctl.run_job(job, on_success=self._prepared, on_fail=self._prep_failed, on_cancel=self._prep_cancelled,
+                         on_progress=lambda text, pct: self.prep.update_progress(text, pct))
+
+    def _prep_done(self) -> None:
+        self._job = None
+        self.prep.finish()
+        self.new_file_btn.setEnabled(True)
+
+    def _prepared(self, res) -> None:
+        self._prep_done()
+        self.ctl.after_protect(res)
+        if res.storage_configured and res.upload_errors:
+            self.ctl.toast.emit("Some pieces could not reach your cloud storage, so they travel inside the package. "
+                                "Check your storage in Settings.", "warning")
+        self.entry_id = res.entry["id"]
+        self._fill_files()
+        self._next()                                        # straight on to "Choose a person"
+
+    def _prep_failed(self, message: str) -> None:
+        self._prep_done()
+        self._update_nav()
+        self.prep_error.set(message, "danger")
+        motion.reveal(self.prep_error)
+
+    def _prep_cancelled(self) -> None:
+        self._prep_done()
+        self._update_nav()
+
     def _go(self, i: int) -> None:
         self.step = i
         self.stack.setCurrentIndex(min(i, 2))
@@ -312,7 +371,7 @@ class SendPage(Page):
 
     def _update_nav(self) -> None:
         if self.step == 0:
-            self.next_btn.setEnabled(bool(self.entry_id))
+            self.next_btn.setEnabled(bool(self.entry_id) and self._job is None)
         elif self.step == 1:
             self.next_btn.setEnabled(bool(self.recipient))
 

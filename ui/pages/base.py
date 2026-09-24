@@ -30,10 +30,16 @@ class Page(QScrollArea):
 
     def refresh_while_visible(self, fn, seconds: int = 60) -> QTimer:
         """Re-run fn every `seconds` while this page is on screen (keeps "5 min ago" style times true)."""
+        self._periodic = getattr(self, "_periodic", []) + [fn]
         t = QTimer(self)
-        t.timeout.connect(lambda: self.isVisible() and fn())
+        t.timeout.connect(self._run_periodic)                # a bound method: gone with the page, never dangling
         t.start(seconds * 1000)
         return t
+
+    def _run_periodic(self) -> None:
+        if self.isVisible():
+            for fn in getattr(self, "_periodic", []):
+                fn()
 
     def add_connection_banner(self, texts: dict) -> Banner:
         """
@@ -45,8 +51,13 @@ class Page(QScrollArea):
         self.conn_banner = Banner("", "warning", "Connection settings", (lambda: nav.emit("settings")) if nav else None)
         self.conn_banner.hide()
         self.root.insertWidget(1, self.conn_banner)
-        self.ctl.relay_state_changed.connect(lambda state, _m: self._show_connection(state))
+        # Bound method, not a lambda: Qt disconnects it when this page is destroyed. The controller outlives pages,
+        # and a lambda would keep calling into a deleted page (a crash, not just an error).
+        self.ctl.relay_state_changed.connect(self._relay_state_changed)
         return self.conn_banner
+
+    def _relay_state_changed(self, state: str, _message: str) -> None:
+        self._show_connection(state)
 
     def _show_connection(self, state: str) -> None:
         text = self._conn_texts.get(state, "")

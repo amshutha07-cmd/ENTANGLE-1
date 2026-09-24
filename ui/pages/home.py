@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 import platform_secret
 from ui import icons, theme
 from ui.pages.base import Page
-from ui.widgets import clear_layout, Button, Card, ClickableCard, EmptyState, IconBadge, Pill, label, time_ago
+from ui.widgets import Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, clear_layout, label, time_ago
 
 ACTIVITY_STYLE = {
     "protected": ("shield", "success"), "sent": ("send", "primary"), "delivered": ("check", "success"),
@@ -118,14 +118,17 @@ class HomePage(Page):
         self.root.addWidget(self.activity)
         self.root.addStretch(1)
 
-        ctl.relay_state_changed.connect(lambda *_: self.refresh())
+        ctl.relay_state_changed.connect(self._changed)      # bound methods: disconnected with the page
         self.refresh_while_visible(self._fill_activity)
-        ctl.inbox_changed.connect(lambda *_: self.refresh())
+        ctl.inbox_changed.connect(self._changed)
         ctl.activity_changed.connect(self.refresh)
         ctl.vault_changed.connect(self.refresh)
         ctl.contacts_changed.connect(self.refresh)
 
     def on_show(self) -> None:
+        self.refresh()
+
+    def _changed(self, *_a) -> None:
         self.refresh()
 
     def refresh(self) -> None:
@@ -186,8 +189,14 @@ class HomePage(Page):
         lay = self.activity.body
         clear_layout(lay)
         items = __import__("activity").recent(8, operator=self.ctl.operator or "")
-        if not items:
-            lay.addWidget(EmptyState("activity", "Nothing yet", "Protect or send your first file and it will show up here."))
+        if not items:                                     # one quiet line, not a tall empty box below the fold
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(12, 10, 12, 10)
+            hl.setSpacing(12)
+            hl.addWidget(IconBadge("activity", "neutral", 34))
+            hl.addWidget(label("Nothing yet. Files you protect, send and receive will show up here.", "muted"), 1)
+            lay.addWidget(row)
             return
         for it in items:
             icon, kind = ACTIVITY_STYLE.get(it["kind"], ("info", "neutral"))
@@ -198,9 +207,9 @@ class HomePage(Page):
             hl.addWidget(IconBadge(icon, kind, 34))
             col = QVBoxLayout()
             col.setSpacing(0)
-            col.addWidget(label(it["title"], "body", wrap=False))
+            col.addWidget(ElidedLabel(it["title"], "body"))
             if it.get("detail"):
-                col.addWidget(label(it["detail"], "muted", wrap=False))
+                col.addWidget(ElidedLabel(it["detail"], "muted"))
             hl.addLayout(col, 1)
             hl.addWidget(label(time_ago(it["ts"]), "faint", wrap=False))
             lay.addWidget(row)

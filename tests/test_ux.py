@@ -1,5 +1,6 @@
 """Behaviour people notice: auto-lock never cuts off a transfer, quitting mid-transfer asks, the Sent list names files,
 offline states explain themselves, long lists can be searched, and the window reopens where it was."""
+import os
 import time
 
 import pytest
@@ -65,7 +66,7 @@ def test_auto_lock_waits_for_a_transfer_and_warns_first(signed_in):
     ctl._jobs.clear()
     set_pref("auto_lock_minutes", 10)
     win._activity()
-    assert win._idle_warn.isActive() and 0 < win._idle_warn.remainingTime() <= (600 - 30) * 1000
+    assert win._idle_warn.isActive() and 560_000 < win._idle_warn.remainingTime() <= 571_000   # timers round a little
     before = len(win.toasts._toasts())
     win._idle_warn.timeout.emit()
     assert len(win.toasts._toasts()) == before + 1          # "Locking in 30 seconds…"
@@ -157,3 +158,102 @@ def test_icon_only_buttons_have_names():
     named = Button("Send", "primary")
     named.setToolTip("Send this file")
     assert named.accessibleName() == ""                      # a button with text is already named by its text
+
+
+def test_work_in_progress_shows_from_any_other_page(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    ctl, win = signed_in
+    win.go("home")
+    ctl.work_progress.emit("k1", "send", "Uploading to sam…", 42)
+    assert win.work_pill.isVisible() and win.work_pill.text() == "Uploading to sam 42%"
+    win.go("send")                                           # the Send page shows its own progress bar
+    assert not win.work_pill.isVisible()
+    win.go("home")
+    assert win.work_pill.isVisible()
+    QTest.mouseClick(win.work_pill, Qt.MouseButton.LeftButton)
+    assert win.content.currentWidget() is win.pages["send"]
+    win.go("home")
+    ctl.work_done.emit("k1")
+    assert not win.work_pill.isVisible()
+
+
+def test_controller_reports_real_work_but_not_background_lookups(signed_in):
+    from ui.controller import Job
+    ctl, win = signed_in
+    seen, done = [], []
+    ctl.work_progress.connect(lambda k, page, label, pct: seen.append((page, label, pct)))
+    ctl.work_done.connect(done.append)
+
+    def work(progress, cancelled):
+        progress("Storing pieces…", 50)
+        return "ok"
+    for name in ("protect", "directory"):
+        job = Job(work, name)
+        ctl.run_job(job)
+        end = time.time() + 5
+        while job.isRunning() or time.time() < end and not job.isFinished():
+            app.processEvents()
+            time.sleep(0.01)
+        pump(0.2)
+    assert ("vault", "Protecting…", 0) in seen and ("vault", "Storing pieces…", 50) in seen
+    assert all(page == "vault" for page, _l, _p in seen) and len(done) == 1   # the directory job stayed quiet
+
+
+def test_send_can_protect_a_new_file_and_carry_on(signed_in, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from ui.controller import Job
+    ctl, win = signed_in
+    src = tmp_path / "minutes.docx"
+    src.write_bytes(b"x" * 500)
+    made = []
+
+    def fake_protect(path):
+        def work(progress, cancelled):
+            progress("Encrypting and splitting your file…", 30)
+            entry = VaultLedger.add_entry(os.path.basename(path), "/nowhere/new.png", "2026-09-25 09:00:00",
+                                          size=500, storage={"inline": 12}, owner="ux_user")
+            return SimpleNamespace(entry=entry, cloud=0, inline=12, upload_errors={}, storage_configured=False)
+        job = Job(work, "protect")
+        made.append(job)
+        return job
+    monkeypatch.setattr(ctl, "make_protect_job", fake_protect)
+    sp = win.pages["send"]
+    monkeypatch.setattr(sp, "_refresh_people", lambda: None)
+    win.go("send")
+    sp.protect_and_continue(str(src))
+    assert made and made[0].page == "send" and not sp.next_btn.isEnabled()   # busy: can't continue yet
+    end = time.time() + 5
+    while sp._job is not None and time.time() < end:
+        app.processEvents()
+        time.sleep(0.01)
+    entry = VaultLedger.get(sp.entry_id)
+    assert sp.step == 1 and entry["original_filename"] == "minutes.docx"      # straight on to "Choose a person"
+
+
+def test_dropping_a_file_on_the_send_page_protects_it_for_sending(signed_in, tmp_path):
+    from PyQt6.QtCore import QMimeData, QUrl
+    ctl, win = signed_in
+    f = tmp_path / "plan.pdf"
+    f.write_bytes(b"x")
+    sp = win.pages["send"]
+    routed = []
+    sp.protect_and_continue = routed.append
+    win.pages["vault"].protect_file = lambda p: routed.append(("vault", p))
+
+    class Drop:
+        def __init__(self):
+            self.m = QMimeData()
+            self.m.setUrls([QUrl.fromLocalFile(str(f))])
+
+        def mimeData(self):
+            return self.m
+
+        def acceptProposedAction(self):
+            pass
+    win.go("send")
+    win.dropEvent(Drop())
+    assert routed == [str(f)]                                # stays on Send, keeps the sending flow
+    win.go("home")
+    win.dropEvent(Drop())
+    assert routed[-1] == ("vault", str(f))                   # anywhere else: Protect, as before

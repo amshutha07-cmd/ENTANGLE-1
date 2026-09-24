@@ -210,8 +210,13 @@ class MainWindow(QMainWindow):
             pill.clicked.connect(lambda: self.root_stack.currentIndex() == 1 and self.go("settings"))
         self.engine_banner_pill = Pill("", "danger")
         self.engine_banner_pill.hide()
+        self.work_pill = ClickablePill("", "info")           # "Sending to sam… 42%" while you are elsewhere
+        self.work_pill.hide()
+        self.work_pill.clicked.connect(self._open_work)
+        self._work: dict[str, dict] = {}
         lay.addWidget(self.relay_pill)
         lay.addWidget(self.storage_pill)
+        lay.addWidget(self.work_pill)
         lay.addWidget(self.engine_banner_pill)
         lay.addStretch(1)
         lay.addWidget(label(f"v{APP_VERSION}", "faint", wrap=False))
@@ -239,7 +244,9 @@ class MainWindow(QMainWindow):
         ctl.session_ended.connect(self._session_ended)
         ctl.toast.connect(self.toasts_show)
         ctl.new_transfers.connect(self._new_transfers)
-        ctl.inbox_changed.connect(lambda items: self._set_waiting(len(items)))
+        ctl.inbox_changed.connect(self._inbox_changed)
+        ctl.work_progress.connect(self._work_progress)
+        ctl.work_done.connect(self._work_done)
         ctl.relay_state_changed.connect(self._relay_state)
         ctl.vault_changed.connect(self._storage_pill)
 
@@ -253,6 +260,7 @@ class MainWindow(QMainWindow):
         self.content.setCurrentWidget(page)
         if changed:
             motion.fade_in(page, motion.FAST)
+            self._show_work()
         for k, b in self.nav.items():
             b.setChecked(k == key)
         page.on_show()
@@ -277,6 +285,13 @@ class MainWindow(QMainWindow):
         if not path:
             return
         e.acceptProposedAction()
+        send = self.pages["send"]
+        if self.content.currentWidget() is send:            # on Send: protect it and carry on sending it
+            if send._job is not None:
+                self.toasts_show("Still working on the last file. Drop the next one when it has finished.", "warning")
+            else:
+                send.protect_and_continue(path)
+            return
         vault = self.pages["vault"]
         if vault._job is not None:
             self.toasts_show("Already protecting a file. Drop the next one when it has finished.", "warning")
@@ -313,6 +328,42 @@ class MainWindow(QMainWindow):
     def showEvent(self, e) -> None:
         super().showEvent(e)
         QTimer.singleShot(0, drop_button_focus)        # Qt focuses the first button on open: no ring until Tab
+
+    # ── work in progress, visible from any page ──────────────────────────────
+    def _work_progress(self, key: str, page: str, label: str, pct: int) -> None:
+        import time
+        self._work[key] = {"page": page, "label": label, "pct": pct, "t": time.monotonic()}
+        self._show_work()
+
+    def _work_done(self, key: str) -> None:
+        self._work.pop(key, None)
+        self._show_work()
+
+    def _show_work(self) -> None:
+        here = self.content.currentWidget()
+        away = [w for w in self._work.values() if self.pages.get(w["page"]) is not here]
+        if not away or self.root_stack.currentIndex() != 1:
+            self.work_pill.hide()
+            motion.breathe(self.work_pill, False)
+            return
+        w = max(away, key=lambda x: x["t"])
+        label = w["label"].rstrip("…. ")
+        label = label if len(label) <= 42 else label[:41].rstrip() + "…"
+        more = f"  (+{len(away) - 1} more)" if len(away) > 1 else ""
+        self.work_pill.set(f"{label} {w['pct']}%{more}" if w["pct"] else f"{label}…{more}", "info")
+        self.work_pill.setToolTip("Click to see it")
+        self.work_pill._page = w["page"]
+        if self.work_pill.isHidden():
+            self.work_pill.show()
+            motion.breathe(self.work_pill, True)
+
+    def _open_work(self) -> None:
+        page = getattr(self.work_pill, "_page", "")
+        if page and self.root_stack.currentIndex() == 1:
+            self.go(page)
+
+    def _inbox_changed(self, items: list) -> None:
+        self._set_waiting(len(items))
 
     def _set_waiting(self, n: int) -> None:
         """Inbox count on the sidebar badge and in the window title (seen in the taskbar / window list)."""
