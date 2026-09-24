@@ -225,7 +225,7 @@ class MainWindow(QMainWindow):
     def _make_tray(self) -> Optional[QSystemTrayIcon]:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return None
-        tray = QSystemTrayIcon(QIcon(icons.pixmap("shield", theme.color("primary"), 32)), self)
+        tray = QSystemTrayIcon(icons.app_icon(), self)
         tray.setToolTip("A.N.Sx Vault")
         tray.show()
         return tray
@@ -369,6 +369,10 @@ class MainWindow(QMainWindow):
         """Inbox count on the sidebar badge and in the window title (seen in the taskbar / window list)."""
         self.nav["inbox"].set_badge(n)
         self.setWindowTitle(f"A.N.Sx Vault ({n} waiting)" if n else "A.N.Sx Vault")
+        try:
+            QApplication.instance().setBadgeNumber(n)         # the count on the Dock / taskbar icon (Qt 6.5+)
+        except (AttributeError, RuntimeError):
+            pass
 
     def _shortcut(self, key: str) -> None:
         if self.root_stack.currentIndex() == 1:
@@ -444,6 +448,11 @@ class MainWindow(QMainWindow):
     # ── status / feedback ────────────────────────────────────────────────────
     def toasts_show(self, message: str, kind: str = "info") -> None:
         self.toasts.show_toast(message, kind)
+        # Something happened while the app was in the background (e.g. "sam received your file"): tell the system too.
+        if self._tray is not None and not self.isActiveWindow() and kind in ("success", "warning", "error"):
+            icon = {"success": QSystemTrayIcon.MessageIcon.Information, "warning": QSystemTrayIcon.MessageIcon.Warning,
+                    "error": QSystemTrayIcon.MessageIcon.Critical}[kind]
+            self._tray.showMessage("A.N.Sx Vault", message, icon, 6000)
 
     def _relay_state(self, state: str, message: str) -> None:
         text, kind = {"online": ("Online", "success"), "connecting": ("Connecting…", "info"),

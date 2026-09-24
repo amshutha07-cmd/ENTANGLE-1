@@ -299,7 +299,7 @@ class NavButton(QPushButton):
         self.refresh_icon()
 
     def refresh_icon(self) -> None:
-        col = theme.color("primary") if self.isChecked() else theme.color("text_muted")
+        col = theme.color("primary_on_soft") if self.isChecked() else theme.color("text_muted")
         self.setIcon(icons.icon(self._icon_name, col, 20))
 
     def badge(self) -> int:
@@ -342,7 +342,7 @@ class NavButton(QPushButton):
             p.scale(k, k)
             p.translate(-(x + w / 2), -(y + h / 2))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(theme.color("primary")))
+        p.setBrush(QColor(theme.color("primary_fill")))       # white count on it: needs the deeper blue
         p.drawRoundedRect(x, y, w, h, h / 2, h / 2)
         p.setPen(QColor(theme.color("on_primary")))
         p.drawText(x, y, w, h, Qt.AlignmentFlag.AlignCenter, text)
@@ -664,7 +664,7 @@ class Stepper(QWidget):
                     p.setPen(theme.qcolor("primary"))
                     p.drawLine(x0, cy, int(x0 + (x1 - x0) * fill), cy)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(theme.qcolor("success") if done else theme.qcolor("primary") if cur else theme.qcolor("surface_alt"))
+            p.setBrush(theme.qcolor("success") if done else theme.qcolor("primary_fill") if cur else theme.qcolor("surface_alt"))
             p.drawEllipse(QPoint(cx, cy), r, r)
             p.setFont(f)
             p.setPen(QColor("#FFFFFF") if (done or cur) else theme.qcolor("text_faint"))

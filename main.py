@@ -91,6 +91,8 @@ def main() -> int:
     QCoreApplication.setApplicationName("A.N.Sx Vault")
     QCoreApplication.setOrganizationName("ANSX")
     app = QApplication(sys.argv)
+    from ui import icons
+    app.setWindowIcon(icons.app_icon())                   # Dock / taskbar / window icon (not the Python rocket)
 
     from ui import theme
     from ui.controller import pref

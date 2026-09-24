@@ -248,3 +248,60 @@ def test_focus_rings_appear_only_for_keyboard_use():
     QTest.keyClick(win, Qt.Key.Key_Tab)
     settle()
     assert isinstance(QApplication.focusWidget(), QPushButton)       # Tab: a ring shows where you are
+
+
+def _contrast(a: str, b: str) -> float:
+    def lum(h):
+        h = h.lstrip("#")
+        r, g, b_ = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4  # noqa: E731
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b_)
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_every_text_colour_meets_wcag_aa_in_both_themes():
+    """4.5:1 for normal-size text (WCAG 2.x AA). Guards against a palette tweak quietly making text unreadable."""
+    from ui.theme import DARK, LIGHT
+    pairs = [("text", "bg"), ("text", "surface"), ("text", "surface_alt"),
+             ("text_muted", "bg"), ("text_muted", "surface"), ("text_muted", "surface_alt"),
+             ("text_faint", "bg"), ("text_faint", "surface"), ("text_faint", "surface_alt"),
+             ("on_primary", "primary_fill"), ("on_primary", "primary_fill_hover"), ("on_primary", "primary_fill_pressed"),
+             ("primary", "surface"), ("primary_on_soft", "primary_soft"),
+             ("success", "success_soft"), ("warning", "warning_soft"), ("danger", "danger_soft"), ("info", "info_soft")]
+    low = [(name, fg, bg, round(_contrast(t[fg], t[bg]), 2)) for name, t in (("dark", DARK), ("light", LIGHT))
+           for fg, bg in pairs if _contrast(t[fg], t[bg]) < 4.5]
+    assert not low, f"text below 4.5:1: {low}"
+    # and the soft highlight must still be visible against the card it sits on (not merged into it)
+    assert _contrast(DARK["primary_soft"], DARK["surface"]) > 1.15 and _contrast(LIGHT["primary_soft"], LIGHT["surface"]) > 1.15
+
+
+def test_app_icon_comes_in_every_size_a_desktop_asks_for():
+    from ui import icons
+    sizes = {s.width() for s in icons.app_icon().availableSizes()}
+    assert {16, 32, 64, 128, 256, 512} <= sizes
+
+
+def test_dock_badge_and_background_notifications(monkeypatch):
+    from ui.controller import AppController
+    from ui.main_window import MainWindow
+    badges = []
+    monkeypatch.setattr(QApplication, "setBadgeNumber", lambda self, n: badges.append(n), raising=False)
+    win = MainWindow(AppController())
+    win._set_waiting(3)
+    win._set_waiting(0)
+    assert badges[-2:] == [3, 0]                             # the Dock/taskbar icon counts waiting files
+
+    class Tray:
+        def __init__(self):
+            self.messages = []
+
+        def showMessage(self, title, text, icon, ms):
+            self.messages.append(text)
+    win._tray = Tray()
+    monkeypatch.setattr(win, "isActiveWindow", lambda: False)
+    win.toasts_show("sam received your file.", "success")   # in the background: the system shows it too
+    win.toasts_show("Copied.", "info")                       # small confirmations stay in the app
+    monkeypatch.setattr(win, "isActiveWindow", lambda: True)
+    win.toasts_show("alex received your file.", "success")  # in front: the in-app notice is enough
+    assert win._tray.messages == ["sam received your file."]

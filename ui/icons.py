@@ -86,6 +86,38 @@ def pixmap(name: str, color: str, size: int = 20, stroke: float = 1.9) -> QPixma
     return pm
 
 
+def app_icon() -> QIcon:
+    """
+    The application's own icon (Dock, taskbar, window title, tray): a white shield on a blue rounded square, drawn
+    at every size a desktop asks for. Brand colours are fixed, not themed, so the icon looks the same everywhere.
+    """
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QLinearGradient
+    ic = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256, 512, 1024):
+        img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inset = size * 0.06                               # the margin macOS icons conventionally keep
+        box = QRectF(inset, inset, size - 2 * inset, size - 2 * inset)
+        grad = QLinearGradient(box.topLeft(), box.bottomRight())
+        grad.setColorAt(0.0, QColor("#6A89FF"))
+        grad.setColorAt(1.0, QColor("#3150D2"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grad)
+        p.drawRoundedRect(box, box.width() * 0.23, box.height() * 0.23)
+        glyph = size * 0.58
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" '
+               f'stroke-width="{2.1 if size >= 64 else 2.4}" stroke-linecap="round" stroke-linejoin="round">'
+               f'{_P["shield"]}</svg>')
+        QSvgRenderer(QByteArray(svg.encode())).render(
+            p, QRectF((size - glyph) / 2, (size - glyph) / 2 + size * 0.01, glyph, glyph))
+        p.end()
+        ic.addPixmap(QPixmap.fromImage(img))
+    return ic
+
+
 def icon(name: str, color: str, size: int = 20) -> QIcon:
     key = (name, color, size)
     if key not in _cache:
