@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 
 import engine
-from ui import icons, theme
+from ui import icons, motion, theme
 from ui.controller import AppController, pref, set_pref
 from ui.pages.auth import AuthPage
 from ui.pages.contacts import ContactsPage
@@ -199,7 +199,10 @@ class MainWindow(QMainWindow):
         if key == "sent":
             key, tab = "inbox", "sent"
         page = self.pages[key]
+        changed = self.content.currentWidget() is not page
         self.content.setCurrentWidget(page)
+        if changed:
+            motion.fade_in(page, motion.FAST)
         for k, b in self.nav.items():
             b.setChecked(k == key)
         page.on_show()
@@ -231,6 +234,7 @@ class MainWindow(QMainWindow):
         self.chip_name.setText(name)
         self.chip_avatar.set_name(name)
         self.root_stack.setCurrentIndex(1)
+        motion.fade_in(self.root_stack.currentWidget(), motion.NORMAL)
         self._storage_pill()
         self._engine_check()
         self.go("home")

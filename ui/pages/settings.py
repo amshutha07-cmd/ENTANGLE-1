@@ -9,7 +9,7 @@ import engine
 import paths
 import platform_secret
 import relay_config
-from ui import theme
+from ui import motion, theme
 from ui.controller import pref, set_pref
 from ui.dialogs import StorageDialog, confirm
 from ui.pages.base import Page
@@ -127,6 +127,16 @@ class SettingsPage(Page):
         self.lock_combo.currentIndexChanged.connect(self._lock_picked)
         r.addWidget(self.lock_combo)
         app.body.addLayout(r)
+        r = QHBoxLayout()
+        motion_label = label("Animations", "body", wrap=False)
+        motion_label.setToolTip("Short fades and slides that show what changed. Choose “Reduced” if motion bothers you.")
+        r.addWidget(motion_label, 1)
+        self.motion_combo = QComboBox()
+        self.motion_combo.addItem("On", False)
+        self.motion_combo.addItem("Reduced", True)
+        self.motion_combo.currentIndexChanged.connect(self._motion_picked)
+        r.addWidget(self.motion_combo)
+        app.body.addLayout(r)
         self.root.addWidget(app)
 
         # ── security details ──
@@ -158,6 +168,7 @@ class SettingsPage(Page):
         mins = int(pref("auto_lock_minutes", 10) or 0)
         idx = max(0, self.lock_combo.findData(mins))
         self.lock_combo.setCurrentIndex(idx)
+        self.motion_combo.setCurrentIndex(1 if pref("reduce_motion", False) else 0)
         try:
             backend = platform_secret.backend_name()
         except Exception:
@@ -245,6 +256,13 @@ class SettingsPage(Page):
         if self._loading:
             return
         self.theme_changed.emit(self.theme_combo.currentData())
+
+    def _motion_picked(self) -> None:
+        if self._loading:
+            return
+        value = bool(self.motion_combo.currentData())
+        set_pref("reduce_motion", value)
+        motion.set_reduced(value)
 
     def _lock_picked(self) -> None:
         if self._loading:

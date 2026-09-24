@@ -16,6 +16,7 @@ from ui.controller import Job
 from ui.dialogs import confirm
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
+from ui import motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, ProgressPanel,
     human_size, label, time_ago,
@@ -274,7 +275,7 @@ class InboxPage(Page):
         self._last_path = info["path"]
         note, kind = self.ctl.signature_note(info)
         self.result.set(f"Saved “{os.path.basename(info['path'])}” from {info['from']} to your Downloads folder. {note}", kind)
-        self.result.show()
+        motion.reveal(self.result)
         self.notify_if_away(f"Received {os.path.basename(info['path'])}.", "success")
         self._picked()
         open_folder(info["path"])
@@ -285,7 +286,7 @@ class InboxPage(Page):
         self.result.set(message, "danger")
         self._last_path = ""
         self.result._btn.hide()
-        self.result.show()
+        motion.reveal(self.result)
         self._picked()
 
     def _cancelled(self) -> None:

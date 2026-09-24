@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from ui.controller import Job
 from ui.dialogs import confirm
 from ui.pages.base import Page
+from ui import motion
 from ui.widgets import (
     clear_layout,
     Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
@@ -132,7 +133,7 @@ class VaultPage(Page):
             self.result.set(f"“{name}” is protected. {res.cloud} pieces are in your cloud storage and the rest travel inside the package.", "success")
         else:
             self.result.set(f"“{name}” is protected. All 12 pieces are kept inside the package.", "success")
-        self.result.show()
+        motion.reveal(self.result)
         self.notify_if_away(f"{name} is protected.", "success")
 
     def _send_last(self) -> None:
@@ -144,7 +145,7 @@ class VaultPage(Page):
         self._last_protected = None
         self.result._btn.hide()
         self.result.set(message, "danger")
-        self.result.show()
+        motion.reveal(self.result)
         self.notify_if_away(f"Could not {what}. Open Protect to see why.", "error")
 
     def _restore_failed(self, message: str) -> None:
@@ -194,7 +195,7 @@ class VaultPage(Page):
         note, kind = self.ctl.signature_note(info)
         self.result._btn.hide()                                     # "Send it now" belongs to protecting only
         self.result.set(f"Restored to {info['path']}" + ("" if kind == "success" else f". {note}"), kind)
-        self.result.show()
+        motion.reveal(self.result)
         self.notify_if_away("File restored to your Downloads folder.", "success")
         open_folder(info["path"])
 

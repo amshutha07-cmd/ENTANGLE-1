@@ -12,6 +12,7 @@ from security_core import VaultLedger
 from ui.controller import Job
 from ui.dialogs import confirm
 from ui.pages.base import Page
+from ui import motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, IconBadge, KeyValue, ListRow, Pill,
     FitStack, ProgressPanel, Stepper, file_icon, friendly_date, human_size, label,
@@ -359,7 +360,7 @@ class SendPage(Page):
         self.done_title.setText(f"Sent to {result['to']}")
         self.done_text.setText(f"“{entry['original_filename']}” is in {result['to']}'s inbox. They choose whether to accept it, "
                                "and you'll get a notification when they do.")
-        self.done.show()
+        motion.reveal(self.done, motion.SLOW)
         self.stepper.set_current(3)
         self.next_btn.hide()
         self.back_btn.hide()
@@ -371,7 +372,7 @@ class SendPage(Page):
         self.review.show()
         self.back_btn.setEnabled(True)
         self.error.set(message, "danger")
-        self.error.show()
+        motion.reveal(self.error)
         if self.entry_id and self.recipient:
             self.send_btn.setText("Resume sending" if self.ctl.has_pending_upload(self.entry_id, self.recipient) else "Try again")
 

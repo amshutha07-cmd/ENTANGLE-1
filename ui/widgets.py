@@ -8,14 +8,14 @@ import hashlib
 import os
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtProperty, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
     QBoxLayout, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
 )
 
-from ui import icons, theme
+from ui import icons, motion, theme
 
 
 def polish(w: QWidget) -> None:
@@ -266,8 +266,20 @@ class NavButton(QPushButton):
     def badge(self) -> int:
         return self._badge
 
+    def _get_pop(self) -> float:
+        return getattr(self, "_pop", 1.0)
+
+    def _set_pop(self, v: float) -> None:
+        self._pop = v
+        self.update()
+
+    pop = pyqtProperty(float, _get_pop, _set_pop)            # badge scale, animated when a new item arrives
+
     def set_badge(self, n: int) -> None:
+        grew = n > self._badge
         self._badge = n
+        if grew:
+            motion.pulse(self, b"pop")
         self.setAccessibleName(f"{self._text.replace('&&', '&')}, {n} waiting" if n else self._text.replace("&&", "&"))
         self.update()
 
@@ -285,6 +297,11 @@ class NavButton(QPushButton):
         h = 20
         w = max(h, QFontMetrics(f).horizontalAdvance(text) + 12)
         x, y = self.width() - w - 12, (self.height() - h) // 2
+        k = self._get_pop()
+        if k != 1.0:                                      # scale around the badge's centre
+            p.translate(x + w / 2, y + h / 2)
+            p.scale(k, k)
+            p.translate(-(x + w / 2), -(y + h / 2))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(theme.color("primary")))
         p.drawRoundedRect(x, y, w, h, h / 2, h / 2)
@@ -504,11 +521,24 @@ class Fingerprint(QFrame):
         lay.setContentsMargins(14, 10, 10, 10)
         self.text = label("—", "mono", selectable=True)
         self.text.setStyleSheet("font-size: 14px; letter-spacing: 1px;")
-        copy = Button("", "ghost", "copy", "sm")
+        copy = self.copy_btn = Button("", "ghost", "copy", "sm")
         copy.setToolTip("Copy")
-        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.text.text()))
+        copy.clicked.connect(self._copy)
         lay.addWidget(self.text, 1)
         lay.addWidget(copy)
+
+    def _copy(self) -> None:
+        """Copy, and show that it worked: a check mark and "Copied" for a moment."""
+        from PyQt6.QtWidgets import QToolTip
+        QApplication.clipboard().setText(self.text.text())
+        self.copy_btn.set_icon("check")
+        self.copy_btn.setToolTip("Copied")
+        QToolTip.showText(self.copy_btn.mapToGlobal(self.copy_btn.rect().bottomLeft()), "Copied", self.copy_btn)
+        motion.later(1400, self._copy_reset)
+
+    def _copy_reset(self) -> None:
+        self.copy_btn.set_icon("copy")
+        self.copy_btn.setToolTip("Copy")
 
     def set(self, fp: str) -> None:
         # two lines of four groups reads much better than one 71-character run
@@ -526,11 +556,33 @@ class Stepper(QWidget):
     def __init__(self, steps: list[str], parent=None):
         super().__init__(parent)
         self._steps, self._current = steps, 0
+        self._shown = 0.0                                 # where the connecting line's fill has got to (animated)
         self.setMinimumHeight(38)
 
-    def set_current(self, i: int) -> None:
-        self._current = i
+    def _get_shown(self) -> float:
+        return self._shown
+
+    def _set_shown(self, v: float) -> None:
+        self._shown = v
         self.update()
+
+    shown = pyqtProperty(float, _get_shown, _set_shown)
+
+    def set_current(self, i: int) -> None:
+        old, self._current = self._current, i
+        if motion.reduced() or not self.isVisible() or i < old:
+            prev = getattr(self, "_ansx_step_anim", None)
+            if prev is not None:
+                prev.stop()
+            self._set_shown(float(i))
+            return
+        anim = QPropertyAnimation(self, b"shown", self)   # the line to the next step fills in
+        anim.setDuration(motion.SLOW)
+        anim.setStartValue(float(self._shown))
+        anim.setEndValue(float(i))
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        motion._keep(self, anim, "_ansx_step_anim")
+        anim.start()
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
@@ -544,9 +596,14 @@ class Stepper(QWidget):
             cx, cy, r = int(i * w + 16), self.height() // 2, 12
             done, cur = i < self._current, i == self._current
             if i:
-                p.setPen(theme.qcolor("primary") if i <= self._current else theme.qcolor("border"))
-                p.drawLine(int((i - 1) * w + 16 + r + 6 + QFontMetrics(f).horizontalAdvance(self._steps[i - 1])) + 8, cy,
-                           cx - r - 6, cy)
+                x0 = int((i - 1) * w + 16 + r + 6 + QFontMetrics(f).horizontalAdvance(self._steps[i - 1])) + 8
+                x1 = cx - r - 6
+                p.setPen(theme.qcolor("border"))
+                p.drawLine(x0, cy, x1, cy)
+                fill = max(0.0, min(1.0, self._shown - (i - 1)))
+                if fill > 0 and x1 > x0:
+                    p.setPen(theme.qcolor("primary"))
+                    p.drawLine(x0, cy, int(x0 + (x1 - x0) * fill), cy)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(theme.qcolor("success") if done else theme.qcolor("primary") if cur else theme.qcolor("surface_alt"))
             p.drawEllipse(QPoint(cx, cy), r, r)
@@ -586,13 +643,13 @@ class ProgressPanel(Card):
         self.title.setText(title)
         self.detail.setText("")
         self.bar.setRange(0, 100)
-        self.bar.setValue(0)
+        motion.progress_to(self.bar, 0)
         self.cancel_btn.setEnabled(True)
-        self.show()
+        motion.reveal(self, motion.FAST)
 
     def update_progress(self, text: str, pct: int) -> None:
         self.detail.setText(text)
-        self.bar.setValue(max(0, min(100, pct)))
+        motion.progress_to(self.bar, max(0, min(100, pct)))
 
     def indeterminate(self, text: str) -> None:
         self.detail.setText(text)
@@ -745,10 +802,15 @@ class ToastHost(QWidget):
         self._lay.addWidget(t)
         t.show()
         self._fit()
+        motion.fade_in(t, motion.NORMAL)
         QTimer.singleShot(ms, lambda: self._fade(t))
 
     def _fade(self, t: QFrame) -> None:
         try:
+            if motion.reduced():
+                t.hide()
+                t.deleteLater()
+                return
             eff = QGraphicsOpacityEffect(t)
             t.setGraphicsEffect(eff)
             anim = QPropertyAnimation(eff, b"opacity", t)

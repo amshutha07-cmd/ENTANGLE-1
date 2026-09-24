@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from security_core import SecurityCore
-from ui import theme
+from ui import motion, theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
@@ -81,7 +81,7 @@ class LoginView(_Center):
         c.addStretch(1)
         c.addWidget(brand_header())
 
-        card = Card(padding=22, spacing=14)
+        card = self.card = Card(padding=22, spacing=14)
         self.heading = label("Welcome back", "h1", wrap=False)
         card.body.addWidget(self.heading)
         card.body.addWidget(label("Who is unlocking the vault?", "muted"))
@@ -205,6 +205,7 @@ class LoginView(_Center):
         self.pass_edit.selectAll()
         self._picked()
         self._err(message)
+        motion.shake(self.card)                               # "that's not right", without a dialog in the way
 
     def _cancelled(self) -> None:
         self._job = None
@@ -486,7 +487,7 @@ class CreateView(_Center):
         self.create_title.setText("You're all set")
         self.create_detail.setText(f"Welcome, {name}. Your keys were created and protected on this computer.")
         self.fp.set(self.ctl_fp(name))
-        self.done_box.show()
+        motion.reveal(self.done_box, motion.SLOW)
         self.stepper.set_current(3)
         self.next_btn.setText("Open my vault")
         self.next_btn.setVisible(True)
@@ -513,7 +514,8 @@ class CreateView(_Center):
         self.create_title.setText("We could not create your identity")
         self.create_detail.setText("")
         self.error_banner.set(message, "danger")
-        self.error_banner.show()
+        motion.reveal(self.error_banner)
+        motion.shake(self.card)
         self.back_btn.show()
         self.next_btn.hide()
 
