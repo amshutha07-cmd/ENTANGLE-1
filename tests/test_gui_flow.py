@@ -218,7 +218,7 @@ def test_full_user_journey_across_the_real_screens(env, auto_confirm, tmp_path, 
     bob = MainWindow(bob_ctl)
     bob.show()
     assert pump(lambda: len(bob_ctl.inbox) == 1, 25)
-    assert bob.nav["inbox"].text().endswith("1")                     # badge
+    assert bob.nav["inbox"].badge() == 1 and bob.nav["inbox"].accessibleName() == "Inbox, 1 waiting"   # badge
     bob.go("inbox")
     bi = bob.pages["inbox"]
     assert pump(lambda: bi.inbox_list.count() == 1 and bi._current is not None, 10)

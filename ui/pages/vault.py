@@ -13,7 +13,7 @@ from ui.dialogs import confirm
 from ui.pages.base import Page
 from ui.widgets import (
     clear_layout,
-    Banner, Button, Card, DropZone, EmptyState, IconBadge, ProgressPanel, human_size, label,
+    Banner, Button, Card, DropZone, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date, human_size, label,
 )
 
 
@@ -33,16 +33,17 @@ class VaultRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(14)
-        lay.addWidget(IconBadge("file", "primary", 42))
+        lay.addWidget(IconBadge(*file_icon(entry["original_filename"]), 42))
         col = QVBoxLayout()
         col.setSpacing(2)
         name = label(entry["original_filename"], "body", wrap=False)
+        name.setToolTip(entry["original_filename"])
         name.setStyleSheet("font-weight: 650;")
         st = entry.get("storage") or {}
         cloud, inline = st.get("cloud", 0), st.get("inline", 0)
-        where = (f"{cloud} pieces in cloud storage, {inline} inside the package" if cloud
-                 else "stored inside the package" if st else "")
-        sub = " · ".join(x for x in (human_size(entry.get("size")), entry["date_vaulted"][:16], where) if x and x != "—")
+        where = (f"{cloud} of {cloud + inline} pieces in cloud storage" if cloud
+                 else "all pieces inside the package" if st else "")
+        sub = " · ".join(x for x in (human_size(entry.get("size")), friendly_date(entry["date_vaulted"]), where) if x and x != "—")
         col.addWidget(name)
         col.addWidget(label(sub, "muted", wrap=False))
         lay.addLayout(col, 1)

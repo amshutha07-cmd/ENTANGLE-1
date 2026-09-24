@@ -14,7 +14,7 @@ from ui.dialogs import confirm
 from ui.pages.base import Page
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, IconBadge, KeyValue, ListRow, Pill,
-    ProgressPanel, Stepper, human_size, label,
+    ProgressPanel, Stepper, file_icon, friendly_date, human_size, label,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -203,7 +203,9 @@ class SendPage(Page):
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
             it.setSizeHint(QSize(0, 62))
             self.files.addItem(it)
-            self.files.setItemWidget(it, ListRow(e["original_filename"], f"{human_size(e.get('size'))} · {e['date_vaulted'][:16]}", icon="file"))
+            self.files.setItemWidget(it, ListRow(e["original_filename"], f"{human_size(e.get('size'))} · {friendly_date(e['date_vaulted'])}",
+                                                   icon=file_icon(e["original_filename"])[0],
+                                                   icon_kind=file_icon(e["original_filename"])[1]))
             if e["id"] == self.entry_id:
                 self.files.setCurrentItem(it)
         self.files.blockSignals(False)

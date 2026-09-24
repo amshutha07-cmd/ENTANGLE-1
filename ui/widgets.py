@@ -47,6 +47,45 @@ def label(text: str = "", role: str = "body", wrap: bool = True, selectable: boo
     return lb
 
 
+_FILE_KINDS = {
+    ("pdf",): ("doc", "danger"),
+    ("doc", "docx", "odt", "rtf", "txt", "md", "pages"): ("doc", "primary"),
+    ("xls", "xlsx", "csv", "ods", "numbers"): ("sheet", "success"),
+    ("ppt", "pptx", "odp", "key"): ("media", "warning"),
+    ("png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tif", "tiff", "svg"): ("image", "info"),
+    ("mp4", "mov", "avi", "mkv", "webm"): ("media", "info"),
+    ("mp3", "wav", "m4a", "flac", "aac", "ogg"): ("audio", "info"),
+    ("zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "dmg", "iso"): ("archive", "warning"),
+    ("py", "js", "ts", "java", "c", "cpp", "h", "rs", "go", "json", "xml", "html", "css", "sh", "sql"): ("code", "neutral"),
+}
+
+
+def file_icon(name: str) -> tuple[str, str]:
+    """(icon, badge kind) for a file name, so a PDF, a photo and a spreadsheet are told apart at a glance."""
+    ext = os.path.splitext(name or "")[1].lower().lstrip(".")
+    for exts, look in _FILE_KINDS.items():
+        if ext in exts:
+            return look
+    return "file", "neutral"
+
+
+def friendly_date(stamp: str) -> str:
+    """ "2026-09-24 23:14:05" -> "Today, 23:14" / "Yesterday, 09:02" / "Sep 12, 14:30" / "Sep 12, 2025"."""
+    import datetime
+    try:
+        when = datetime.datetime.strptime((stamp or "")[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return (stamp or "")[:16]
+    today = datetime.date.today()
+    if when.date() == today:
+        return f"Today, {when:%H:%M}"
+    if when.date() == today - datetime.timedelta(days=1):
+        return f"Yesterday, {when:%H:%M}"
+    if when.year == today.year:
+        return f"{when:%b} {when.day}, {when:%H:%M}"
+    return f"{when:%b} {when.day}, {when.year}"
+
+
 def human_size(n: Optional[int]) -> str:
     if n is None:
         return "—"
@@ -120,10 +159,34 @@ class NavButton(QPushButton):
         col = theme.color("primary") if self.isChecked() else theme.color("text_muted")
         self.setIcon(icons.icon(self._icon_name, col, 20))
 
+    def badge(self) -> int:
+        return self._badge
+
     def set_badge(self, n: int) -> None:
         self._badge = n
-        self.setText(f"{self._text}    ●{n}" if n else self._text)
-        self.setToolTip(f"{n} waiting" if n else "")
+        self.setAccessibleName(f"{self._text.replace('&&', '&')}, {n} waiting" if n else self._text.replace("&&", "&"))
+        self.update()
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if not self._badge:
+            return
+        text = "99+" if self._badge > 99 else str(self._badge)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        f = QFont(self.font())
+        f.setPointSizeF(max(8.0, f.pointSizeF() * 0.8))
+        f.setWeight(QFont.Weight.Bold)
+        p.setFont(f)
+        h = 20
+        w = max(h, QFontMetrics(f).horizontalAdvance(text) + 12)
+        x, y = self.width() - w - 12, (self.height() - h) // 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.color("primary")))
+        p.drawRoundedRect(x, y, w, h, h / 2, h / 2)
+        p.setPen(QColor(theme.color("on_primary")))
+        p.drawText(x, y, w, h, Qt.AlignmentFlag.AlignCenter, text)
+        p.end()
 
 
 # ── small display pieces ─────────────────────────────────────────────────────────────────────────
@@ -266,10 +329,10 @@ class EmptyState(QWidget):
         self.setMinimumHeight(230)              # wrapped text needs room, or Qt clips the last line
         self.badge = IconBadge(icon, "neutral", 56)
         lay.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignHCenter)
-        t = label(title, "h2", wrap=False)
+        t = self._title = label(title, "h2", wrap=False)
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
-        d = label(text, "muted")
+        d = self._text = label(text, "muted")
         d.setAlignment(Qt.AlignmentFlag.AlignCenter)
         d.setMinimumWidth(320)
         d.setMaximumWidth(400)
@@ -280,6 +343,10 @@ class EmptyState(QWidget):
             if on_action:
                 b.clicked.connect(on_action)
             lay.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def set_text(self, title: str, text: str) -> None:
+        self._title.setText(title)
+        self._text.setText(text)
 
 
 class SectionHeader(QWidget):
@@ -460,15 +527,19 @@ class DropZone(QFrame):
 
     def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
-            path, _ = QFileDialog.getOpenFileName(self, "Choose a file to protect")
-            if path:
-                self.file_chosen.emit(path)
+            self.choose()
+
+    def choose(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file to protect")
+        if path:
+            self.file_chosen.emit(path)
 
 
 class ListRow(QWidget):
     """Avatar/icon + two text lines + optional trailing widgets, for QListWidget.setItemWidget."""
 
-    def __init__(self, title: str, subtitle: str = "", avatar: str = "", icon: str = "", right: Optional[list] = None, parent=None):
+    def __init__(self, title: str, subtitle: str = "", avatar: str = "", icon: str = "", right: Optional[list] = None,
+                 parent=None, icon_kind: str = "neutral"):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lay = QHBoxLayout(self)
@@ -477,7 +548,7 @@ class ListRow(QWidget):
         if avatar:
             lay.addWidget(Avatar(avatar, 38))
         elif icon:
-            lay.addWidget(IconBadge(icon, "neutral", 38))
+            lay.addWidget(IconBadge(icon, icon_kind, 38))
         col = QVBoxLayout()
         col.setSpacing(1)
         self.title = label(title, "body", wrap=False)

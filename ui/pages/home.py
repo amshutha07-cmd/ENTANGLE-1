@@ -81,22 +81,25 @@ class HomePage(Page):
         self.checklist = Card(padding=18, spacing=8)
         self.check_rows: dict[str, QLabel] = {}
         self.checklist.body.addWidget(label("Finish setting up", "h2", wrap=False))
-        self.checklist.body.addWidget(label("A couple of quick steps and everything works end to end.", "muted"))
-        for key, text in (("relay", "Connect to a relay so people can reach you"),
-                          ("storage", "Add cloud storage for larger files (recommended)"),
-                          ("verify", "Verify a friend's key so you know it's really them")):
+        self.check_progress = label("", "muted")
+        self.checklist.body.addWidget(self.check_progress)
+        self.check_actions: dict[str, Button] = {}
+        self.check_texts: dict[str, QLabel] = {}
+        for key, text, action, icon, page in (
+                ("relay", "Connect to a relay so people can reach you", "Connect", "wifi", "settings"),
+                ("storage", "Add cloud storage for larger files (recommended)", "Add storage", "cloud", "settings"),
+                ("verify", "Verify a friend's key so you know it's really them", "Verify someone", "key", "contacts")):
             r = QHBoxLayout()
             ic = QLabel()
             self.check_rows[key] = ic
             r.addWidget(ic)
-            r.addWidget(label(text, "body"), 1)
+            self.check_texts[key] = label(text, "body")
+            r.addWidget(self.check_texts[key], 1)
+            b = Button(action, "secondary", icon, "sm")
+            b.clicked.connect(lambda _c=False, p=page: self.navigate.emit(p))
+            self.check_actions[key] = b
+            r.addWidget(b)
             self.checklist.body.addLayout(r)
-        btns = QHBoxLayout()
-        self.setup_btn = Button("Open settings", "primary", "settings", "sm")
-        self.setup_btn.clicked.connect(lambda: self.navigate.emit("settings"))
-        btns.addWidget(self.setup_btn)
-        btns.addStretch()
-        self.checklist.body.addLayout(btns)
         self.root.addWidget(self.checklist)
 
         tiles = QHBoxLayout()
@@ -158,15 +161,22 @@ class HomePage(Page):
             backend = platform_secret.backend_name()
         except Exception:
             backend = "file"
-        where = {"tpm2": "your computer's TPM chip", "keyring": "your system's secure storage",
-                 "file": "a protected file (weaker)"}.get(backend, backend)
-        self.tile_security.set("Card unlock" if mode == "nfc" else "Passphrase unlock",
-                               f"Your keys are protected by {where}.", "success" if backend != "file" else "warning", "shield")
+        where = {"tpm2": "Keys are sealed by this computer's TPM chip.",
+                 "keyring": "Keys are sealed in your system's secure storage.",
+                 "file": "Keys are sealed in a file on this computer (less protected than a keychain)."}.get(
+            backend, f"Keys are sealed by {backend}.")
+        self.tile_security.set("Card unlock" if mode == "nfc" else "Passphrase unlock", where,
+                               "success" if backend != "file" else "warning", "shield")
 
         verified = any(c.get("verified") for c in ctl.contacts())
         done = {"relay": state == "online", "storage": bool(targets), "verify": verified}
         for key, ic in self.check_rows.items():
             ic.setPixmap(icons.pixmap("check" if done[key] else "clock", theme.color("success" if done[key] else "text_faint"), 18))
+            self.check_actions[key].setVisible(not done[key])
+            self.check_texts[key].setProperty("role", "muted" if done[key] else "body")
+            self.check_texts[key].style().polish(self.check_texts[key])
+        n = sum(done.values())
+        self.check_progress.setText(f"{n} of {len(done)} done. Each step takes a minute or two.")
         self.checklist.setVisible(not (done["relay"] and done["storage"]))
 
         self._fill_activity()

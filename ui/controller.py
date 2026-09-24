@@ -373,7 +373,8 @@ class AppController(QObject):
     def after_protect(self, result: "vault_service.ProtectResult") -> None:
         e = result.entry
         activity.add("protected", f"Protected {e['original_filename']}",
-                     f"{result.cloud} pieces in cloud storage, {result.inline} carried inside the package",
+                     (f"{result.cloud} of {result.cloud + result.inline} pieces in cloud storage" if result.cloud
+                      else "All 12 pieces carried inside the package"),
                      operator=self.operator or "")
         self.vault_changed.emit()
         self.activity_changed.emit()

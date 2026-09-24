@@ -92,9 +92,12 @@ class MainWindow(QMainWindow):
         self._idle.timeout.connect(self._idle_lock)
         self._watcher = _ActivityWatcher(self._activity)
         QApplication.instance().installEventFilter(self._watcher)
-        for i, (key, _t, _i) in enumerate(NAV, start=1):
-            QShortcut(QKeySequence(f"Ctrl+{i}"), self, activated=lambda k=key: self._shortcut(k))
+        for i, (key, text, _i) in enumerate(NAV, start=1):
+            seq = QKeySequence(f"Ctrl+{i}")
+            QShortcut(seq, self, activated=lambda k=key: self._shortcut(k))
+            self.nav[key].setToolTip(f"{text}   {seq.toString(QKeySequence.SequenceFormat.NativeText)}")
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._lock)
+        QShortcut(QKeySequence("Ctrl+O"), self, activated=self._protect_shortcut)
 
         if self.ctl.operator:                       # attached to a session that is already running: adopt its state
             self._session_started(self.ctl.operator)
@@ -208,6 +211,12 @@ class MainWindow(QMainWindow):
     def _shortcut(self, key: str) -> None:
         if self.root_stack.currentIndex() == 1:
             self.go(key)
+
+    def _protect_shortcut(self) -> None:
+        """Ctrl/⌘+O: straight to choosing a file to protect."""
+        if self.root_stack.currentIndex() == 1:
+            self.go("vault")
+            self.pages["vault"].drop.choose()
 
     def _send_entry(self, entry_id: str) -> None:
         self.pages["send"].preselect(entry_id)
