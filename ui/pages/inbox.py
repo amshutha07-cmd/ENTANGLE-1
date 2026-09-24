@@ -84,7 +84,8 @@ class InboxPage(Page):
         self.inbox_list.setMinimumWidth(320)
         self.inbox_list.itemSelectionChanged.connect(self._picked)
         left.body.addWidget(self.inbox_list)
-        self.inbox_empty = EmptyState("inbox", "Inbox is empty", "When someone sends you a file it appears here within seconds.")
+        self.inbox_empty = EmptyState("inbox", "Inbox is empty", "When someone sends you a file it appears here within seconds.",
+                                      "Copy my name", self._copy_my_name)
         left.body.addWidget(self.inbox_empty)
         rl.addWidget(left, 5)
 
@@ -191,7 +192,16 @@ class InboxPage(Page):
             self.inbox_list.setCurrentRow(0)
         self.inbox_list.setVisible(bool(items))
         self.inbox_empty.setVisible(not items)
+        if not items and self.ctl.operator:
+            self.inbox_empty.set_text("Inbox is empty", f"People send you files by your name, {self.ctl.operator}. Share it "
+                                                        "with them; a new file appears here within seconds.")
         self._picked()
+
+    def _copy_my_name(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+        if self.ctl.operator:
+            QApplication.clipboard().setText(self.ctl.operator)
+            self.ctl.toast.emit(f"Copied “{self.ctl.operator}”. Send it to the people who will send you files.", "success")
 
     def _picked(self) -> None:
         li = self.inbox_list.currentItem()
@@ -265,7 +275,7 @@ class InboxPage(Page):
         note, kind = self.ctl.signature_note(info)
         self.result.set(f"Saved “{os.path.basename(info['path'])}” from {info['from']} to your Downloads folder. {note}", kind)
         self.result.show()
-        self.ctl.toast.emit(f"Received {os.path.basename(info['path'])}.", "success")
+        self.notify_if_away(f"Received {os.path.basename(info['path'])}.", "success")
         self._picked()
         open_folder(info["path"])
 

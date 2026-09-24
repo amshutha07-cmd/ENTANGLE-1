@@ -5,7 +5,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QStackedWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout, QWidget,
 )
 
 from security_core import VaultLedger
@@ -14,7 +14,7 @@ from ui.dialogs import confirm
 from ui.pages.base import Page
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, IconBadge, KeyValue, ListRow, Pill,
-    ProgressPanel, Stepper, file_icon, friendly_date, human_size, label,
+    FitStack, ProgressPanel, Stepper, file_icon, friendly_date, human_size, label,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -34,7 +34,7 @@ class SendPage(Page):
         self.stepper = Stepper(["Choose a file", "Choose a person", "Review and send"])
         self.root.addWidget(self.stepper)
         self.card = Card(padding=24, spacing=14)
-        self.stack = QStackedWidget()
+        self.stack = FitStack()                         # as tall as the current step, not the tallest one
         self.card.body.addWidget(self.stack)
         self.root.addWidget(self.card)
 
@@ -43,7 +43,8 @@ class SendPage(Page):
         l0 = QVBoxLayout(s0)
         l0.setContentsMargins(0, 0, 0, 0)
         l0.setSpacing(10)
-        l0.addWidget(label("Which file do you want to send?", "h2"))
+        self.files_heading = label("Which file do you want to send?", "h2")
+        l0.addWidget(self.files_heading)
         self.files = QListWidget()
         self.files.itemSelectionChanged.connect(self._file_picked)
         self.files.itemDoubleClicked.connect(lambda _i: self._next())
@@ -116,7 +117,13 @@ class SendPage(Page):
         rl.addWidget(self.trust_banner)
         self.send_btn = Button("Send securely", "primary", "send", "lg")
         self.send_btn.clicked.connect(self._send)
-        rl.addWidget(self.send_btn)
+        send_row = QHBoxLayout()
+        self.review_back = Button("Back", "ghost", "back")
+        self.review_back.clicked.connect(self._back)
+        send_row.addWidget(self.review_back)
+        send_row.addStretch()
+        send_row.addWidget(self.send_btn)
+        rl.addLayout(send_row)
         l2.addWidget(self.review)
 
         self.progress = ProgressPanel()
@@ -210,7 +217,10 @@ class SendPage(Page):
                 self.files.setCurrentItem(it)
         self.files.blockSignals(False)
         self.files.setVisible(bool(entries))
+        self.files_heading.setVisible(bool(entries))
         self.files_empty.setVisible(not entries)
+        if self.step == 0:
+            self.next_btn.setVisible(bool(entries))          # nothing to continue with: the empty state's button leads
         self._update_nav()
 
     def _fill_people(self) -> None:
@@ -262,8 +272,8 @@ class SendPage(Page):
         self.step = i
         self.stack.setCurrentIndex(min(i, 2))
         self.stepper.set_current(i)
-        self.back_btn.setVisible(0 < i < 3)
-        self.next_btn.setVisible(i < 2)
+        self.back_btn.setVisible(i == 1)                   # step 3 has its own Back beside "Send securely"
+        self.next_btn.setVisible(i == 1 or (i == 0 and self.files.count() > 0))   # no files: the empty state leads
         if i == 2:
             self._fill_review()
         self._update_nav()
@@ -353,7 +363,7 @@ class SendPage(Page):
         self.stepper.set_current(3)
         self.next_btn.hide()
         self.back_btn.hide()
-        self.ctl.toast.emit(f"Sent to {result['to']}.", "success")
+        self.notify_if_away(f"Sent to {result['to']}.", "success")
 
     def _failed(self, message: str) -> None:
         self._job = None

@@ -14,6 +14,7 @@ from ui import theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
+    FitStack,
     Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish,
 )
 
@@ -244,7 +245,7 @@ class CreateView(_Center):
         c.addWidget(self.stepper)
 
         self.card = Card(padding=24, spacing=14)
-        self.stack = QStackedWidget()
+        self.stack = FitStack()                         # the card fits the current step instead of the tallest one
         self.card.body.addWidget(self.stack)
         c.addWidget(self.card)
 
@@ -312,6 +313,8 @@ class CreateView(_Center):
         l1.addStretch()
         self.pw1.textChanged.connect(self._pw_changed)
         self.pw2.textChanged.connect(self._pw_changed)
+        self.pw1.returnPressed.connect(self.pw2.setFocus)            # Enter moves on, like a form should
+        self.pw2.returnPressed.connect(lambda: self.next_btn.isEnabled() and self._next())
         self.stack.addWidget(s1)
 
         # step 2 — creating / done

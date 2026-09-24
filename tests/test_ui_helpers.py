@@ -46,3 +46,69 @@ def test_empty_state_text_can_change():
     e = EmptyState("users", "No one yet", "Import someone.")
     e.set_text("No match", "Nobody called “zed”.")
     assert (e._title.text(), e._text.text()) == ("No match", "Nobody called “zed”.")
+
+
+def test_fit_stack_is_as_tall_as_the_page_on_screen():
+    from PyQt6.QtWidgets import QVBoxLayout, QWidget
+    from ui.widgets import FitStack, label
+
+    def page(lines):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        for _ in range(lines):
+            lay.addWidget(label("A line of explanation that wraps when the column is narrow enough to need it.", "body"))
+        return w
+
+    st = FitStack()
+    st.addWidget(page(1))
+    st.addWidget(page(12))
+    assert st.sizeHint().height() < st.widget(1).sizeHint().height()           # short page: short stack
+    assert st.layout().heightForWidth(300) < st.widget(1).heightForWidth(300)  # also for wrapped text
+    seen = []
+    st.currentChanged.connect(seen.append)
+    st.setCurrentIndex(1)
+    assert seen == [1] and st.currentIndex() == 1 and st.sizeHint().height() == st.widget(1).sizeHint().height()
+
+
+def test_long_labels_shorten_but_keep_their_text():
+    from ui.widgets import ElidedLabel
+    name = "an extremely long file name that would never fit in a narrow window.pdf"
+    lb = ElidedLabel(name)
+    lb.resize(120, 20)
+    lb.show()
+    app.processEvents()
+    assert lb.text() == name and lb.toolTip() == name
+    from PyQt6.QtWidgets import QLabel
+    assert QLabel.text(lb).endswith("…") and len(QLabel.text(lb)) < len(name)
+    assert lb.minimumSizeHint().width() < 120                                # never forces its row wider
+
+
+def test_banner_puts_its_button_under_the_text_when_narrow():
+    from PyQt6.QtWidgets import QBoxLayout
+    from ui.widgets import Banner
+    b = Banner("You haven't verified sam's key. Compare the fingerprint with them first.", "warning", "I verified it")
+    b.show()                                                                  # resize events reach shown widgets only
+    b.resize(900, 60)
+    assert b._inner.direction() == QBoxLayout.Direction.LeftToRight
+    b.resize(360, 120)
+    assert b._inner.direction() == QBoxLayout.Direction.TopToBottom
+    b._btn.hide()
+    b.resize(361, 120)
+    assert b._inner.direction() == QBoxLayout.Direction.LeftToRight            # no button: nothing to stack
+
+
+def test_a_finished_job_is_announced_only_when_you_are_elsewhere():
+    from PyQt6.QtCore import QObject, pyqtSignal
+    from ui.pages.base import Page
+
+    class Ctl(QObject):
+        toast = pyqtSignal(str, str)
+
+    ctl, seen = Ctl(), []
+    ctl.toast.connect(lambda t, k: seen.append(t))
+    page = Page(ctl, "Protect a file")
+    page.notify_if_away("report.pdf is protected.", "success")         # page not on screen: tell them
+    page.show()
+    app.processEvents()
+    page.notify_if_away("notes.txt is protected.", "success")          # on screen: the page already says so
+    assert seen == ["report.pdf is protected."]

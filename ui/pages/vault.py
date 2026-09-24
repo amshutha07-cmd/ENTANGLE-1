@@ -13,7 +13,8 @@ from ui.dialogs import confirm
 from ui.pages.base import Page
 from ui.widgets import (
     clear_layout,
-    Banner, Button, Card, DropZone, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date, human_size, label,
+    Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
+    human_size, label,
 )
 
 
@@ -36,8 +37,7 @@ class VaultRow(QWidget):
         lay.addWidget(IconBadge(*file_icon(entry["original_filename"]), 42))
         col = QVBoxLayout()
         col.setSpacing(2)
-        name = label(entry["original_filename"], "body", wrap=False)
-        name.setToolTip(entry["original_filename"])
+        name = ElidedLabel(entry["original_filename"], "body")
         name.setStyleSheet("font-weight: 650;")
         st = entry.get("storage") or {}
         cloud, inline = st.get("cloud", 0), st.get("inline", 0)
@@ -45,7 +45,7 @@ class VaultRow(QWidget):
                  else "all pieces inside the package" if st else "")
         sub = " · ".join(x for x in (human_size(entry.get("size")), friendly_date(entry["date_vaulted"]), where) if x and x != "—")
         col.addWidget(name)
-        col.addWidget(label(sub, "muted", wrap=False))
+        col.addWidget(ElidedLabel(sub, "muted"))
         lay.addLayout(col, 1)
         send = Button("Send", "primary", "send", "sm")
         restore = Button("Restore", "secondary", "download", "sm")
@@ -81,7 +81,8 @@ class VaultPage(Page):
         self.progress.cancel_clicked.connect(self._cancel)
         self.root.addWidget(self.progress)
 
-        self.result = Banner("", "success")
+        self.result = Banner("", "success", "Send it now", self._send_last)
+        self._last_protected: Optional[str] = None
         self.result.hide()
         self.root.addWidget(self.result)
 
@@ -121,6 +122,8 @@ class VaultPage(Page):
         self._done()
         self.ctl.after_protect(res)
         name = res.entry["original_filename"]
+        self._last_protected = res.entry["id"]
+        self.result._btn.show()
         if res.storage_configured and res.upload_errors:
             msg = (f"“{name}” is protected, but {len(res.upload_errors)} piece(s) could not be uploaded, so they are kept "
                    f"inside the package instead. Check your storage in Settings. ({next(iter(res.upload_errors.values()))})")
@@ -130,13 +133,22 @@ class VaultPage(Page):
         else:
             self.result.set(f"“{name}” is protected. All 12 pieces are kept inside the package.", "success")
         self.result.show()
-        self.ctl.toast.emit(f"{name} is protected.", "success")
+        self.notify_if_away(f"{name} is protected.", "success")
 
-    def _failed(self, message: str) -> None:
+    def _send_last(self) -> None:
+        if self._last_protected:
+            self.send_requested.emit(self._last_protected)
+
+    def _failed(self, message: str, what: str = "protect the file") -> None:
         self._done()
+        self._last_protected = None
+        self.result._btn.hide()
         self.result.set(message, "danger")
         self.result.show()
-        self.ctl.toast.emit("Could not protect the file.", "error")
+        self.notify_if_away(f"Could not {what}. Open Protect to see why.", "error")
+
+    def _restore_failed(self, message: str) -> None:
+        self._failed(message, "restore the file")
 
     def _cancelled(self) -> None:
         self._done()
@@ -173,16 +185,17 @@ class VaultPage(Page):
         self.progress.start(f"Restoring {entry['original_filename']}")
         job = self.ctl.make_restore_job(entry)
         self._job = job
-        self.ctl.run_job(job, on_success=self._restored, on_fail=self._failed, on_cancel=self._cancelled,
+        self.ctl.run_job(job, on_success=self._restored, on_fail=self._restore_failed, on_cancel=self._cancelled,
                          on_progress=lambda text, pct: self.progress.update_progress(text, pct))
 
     def _restored(self, info: dict) -> None:
         self._done()
         self.ctl.after_restore(os.path.basename(info["path"]))
         note, kind = self.ctl.signature_note(info)
+        self.result._btn.hide()                                     # "Send it now" belongs to protecting only
         self.result.set(f"Restored to {info['path']}" + ("" if kind == "success" else f". {note}"), kind)
         self.result.show()
-        self.ctl.toast.emit("File restored to your Downloads folder.", "success")
+        self.notify_if_away("File restored to your Downloads folder.", "success")
         open_folder(info["path"])
 
     def _remove(self, entry_id: str) -> None:

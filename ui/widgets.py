@@ -12,7 +12,7 @@ from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QT
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QBoxLayout, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
 )
 
 from ui import icons, theme
@@ -107,6 +107,110 @@ def time_ago(ts: int) -> str:
     if d < 86400:
         return f"{d // 3600} h ago"
     return f"{d // 86400} d ago"
+
+
+# ── layout helpers ───────────────────────────────────────────────────────────────────────────────
+class _FitLayout(QStackedLayout):
+    """Reports the CURRENT page's size (QStackedLayout reports the largest page, including its height-for-width)."""
+
+    def sizeHint(self) -> QSize:
+        w = self.currentWidget()
+        return w.sizeHint() if w is not None else super().sizeHint()
+
+    def minimumSize(self) -> QSize:
+        w = self.currentWidget()
+        return w.minimumSizeHint() if w is not None else super().minimumSize()
+
+    def hasHeightForWidth(self) -> bool:
+        w = self.currentWidget()
+        return w is not None and w.hasHeightForWidth()
+
+    def heightForWidth(self, width: int) -> int:
+        w = self.currentWidget()
+        return w.heightForWidth(width) if w is not None else -1
+
+
+class FitStack(QWidget):
+    """
+    Pages shown one at a time, like QStackedWidget, but only as tall as the page on screen. A stock stack is as tall
+    as its tallest page, which left a short step (e.g. "Choose your name") floating in a mostly empty card.
+    """
+    currentChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = _FitLayout(self)
+        self._lay.currentChanged.connect(self._changed)
+
+    def _changed(self, i: int) -> None:
+        self._lay.invalidate()
+        self.updateGeometry()
+        self.currentChanged.emit(i)
+
+    def addWidget(self, w: QWidget) -> int:
+        return self._lay.addWidget(w)
+
+    def setCurrentIndex(self, i: int) -> None:
+        self._lay.setCurrentIndex(i)
+
+    def setCurrentWidget(self, w: QWidget) -> None:
+        self._lay.setCurrentWidget(w)
+
+    def currentIndex(self) -> int:
+        return self._lay.currentIndex()
+
+    def currentWidget(self) -> Optional[QWidget]:
+        return self._lay.currentWidget()
+
+    def count(self) -> int:
+        return self._lay.count()
+
+    def widget(self, i: int) -> Optional[QWidget]:
+        return self._lay.widget(i)
+
+    def indexOf(self, w: QWidget) -> int:
+        return self._lay.indexOf(w)
+
+
+class ElidedLabel(QLabel):
+    """
+    A one-line label that shortens itself with "…" to the space it gets, instead of forcing its container wider (which
+    pushed whole pages past the window's right edge in small windows). text() still returns the full text.
+    """
+
+    def __init__(self, text: str = "", role: str = "body", parent=None):
+        super().__init__(parent)
+        self.setProperty("role", role)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(40)
+        self.setText(text)
+
+    def text(self) -> str:                                   # noqa: D401 - Qt naming
+        return self._full
+
+    def setText(self, text: str) -> None:
+        self._full = text or ""
+        self._elide()
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        h = super().sizeHint().height()
+        return QSize(self.fontMetrics().horizontalAdvance(self._full) + 2, h)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._elide()
+
+    def changeEvent(self, e) -> None:                        # font/style changes (theme switch, bold via stylesheet)
+        super().changeEvent(e)
+        if e.type() in (e.Type.FontChange, e.Type.StyleChange):
+            self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, max(0, self.width()))
+        QLabel.setText(self, shown)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 # ── buttons ──────────────────────────────────────────────────────────────────────────────────────
@@ -300,12 +404,25 @@ class Banner(QFrame):
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(12)
         lay.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignTop)
-        lay.addWidget(self._text, 1)
+        self._inner = QBoxLayout(QBoxLayout.Direction.LeftToRight)   # text beside the button, or above it when narrow
+        self._inner.setSpacing(10)
+        self._inner.addWidget(self._text, 1)
+        lay.addLayout(self._inner, 1)
         if self._btn:
-            lay.addWidget(self._btn)
+            self._inner.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             if on_action:
                 self._btn.clicked.connect(on_action)
         self.set(text, kind)
+
+    NARROW = 520
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        want = (QBoxLayout.Direction.TopToBottom if self._btn is not None and not self._btn.isHidden()
+                and self.width() < self.NARROW
+                else QBoxLayout.Direction.LeftToRight)
+        if self._inner.direction() != want:
+            self._inner.setDirection(want)
 
     def refresh(self) -> None:
         self.set(self._text.text(), self.property("kind") or "info")
@@ -551,9 +668,9 @@ class ListRow(QWidget):
             lay.addWidget(IconBadge(icon, icon_kind, 38))
         col = QVBoxLayout()
         col.setSpacing(1)
-        self.title = label(title, "body", wrap=False)
+        self.title = ElidedLabel(title, "body")
         self.title.setStyleSheet("font-weight: 600;")
-        self.subtitle = label(subtitle, "muted", wrap=False)
+        self.subtitle = ElidedLabel(subtitle, "muted")
         col.addWidget(self.title)
         col.addWidget(self.subtitle)
         lay.addLayout(col, 1)

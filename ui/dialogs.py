@@ -97,7 +97,7 @@ class StorageDialog(QDialog):
 
         form = QFormLayout()
         form.setSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)   # level with each box
         self.provider = QComboBox()
         for key, meta in cloud_dispatcher.PROVIDERS.items():
             self.provider.addItem(meta["label"], key)

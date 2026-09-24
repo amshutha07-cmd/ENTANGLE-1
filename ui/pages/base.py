@@ -28,6 +28,14 @@ class Page(QScrollArea):
         head.addLayout(self.actions)
         self.root.addLayout(head)
 
+    def notify_if_away(self, text: str, kind: str) -> None:
+        """
+        A toast for a job that finished while the person was on ANOTHER page. On this page the result is already shown
+        in place, and a second copy of the same message in the corner is just noise.
+        """
+        if not self.isVisible():
+            self.ctl.toast.emit(text, kind)
+
     def on_show(self) -> None:
         """Called each time the page becomes visible; refresh anything that may have changed."""
 
