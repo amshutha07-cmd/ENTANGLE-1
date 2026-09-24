@@ -14,7 +14,14 @@ every time you start it; the Tailscale address never does, so people only need t
 data (names, waiting files) lives in ./relay_data and survives restarts.
 
 --tailscale needs the Tailscale app, signed in (`tailscale up`), with Funnel allowed for your tailnet. The first
-run prints a link to switch Funnel on if it is not. People who USE the relay do not need Tailscale.
+run prints a link to switch Funnel on if it is not. People who USE the relay do not need Tailscale. Once the
+permanent address is confirmed online it is also written to default_config.json, so apps built from this folder
+already know it (see relay_config.bundled_default).
+
+Start it automatically whenever you log in to this computer (macOS launchd, Linux systemd, Windows Task Scheduler):
+
+    python run_relay.py --tailscale --install-autostart     # remembers these options; runs at every login
+    python run_relay.py --remove-autostart
 """
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ import http.client
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import signal
@@ -35,6 +43,8 @@ import ssl
 import urllib.request
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+AUTOSTART_LABEL = "com.ansx.relay"
+AUTOSTART_TASK = "ANSX Relay"
 URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
 
@@ -250,6 +260,8 @@ def announce(url: str, save: bool, permanent: bool = False) -> None:
             print("  (Saved as this computer's relay setting.)")
         except Exception as exc:                                  # never let this stop the relay
             print(f"  (Could not save the setting automatically: {exc})")
+        if permanent:
+            write_bundled_address(url)
     if not local_dns_ready(url):
         print("\n  NOTE: THIS computer has not learned the new name yet (common with free tunnels).")
         print("  Other computers and phones are usually fine. Here, wait 1-2 minutes, or flush the DNS cache:")
@@ -261,6 +273,148 @@ def announce(url: str, save: bool, permanent: bool = False) -> None:
             print("      sudo resolvectl flush-caches")
         print("  (Or set this computer's DNS servers to 1.1.1.1 and 8.8.8.8.)")
     print("\n  Keep this window open. Press Ctrl+C to stop.\n")
+
+
+def write_bundled_address(url: str, root: str = ROOT) -> None:
+    """Ship the permanent address with the app: relay_config.bundled_default() reads this file, and the spec bundles it."""
+    path = os.path.join(root, "default_config.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if data.get("relay_url") == url:
+        return
+    data["relay_url"] = url
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        print(f"  (Written to {os.path.basename(path)}: apps built or run from this folder use it by default.)")
+    except OSError as exc:
+        print(f"  (Could not write {os.path.basename(path)}: {exc})")
+
+
+# ── start at login ───────────────────────────────────────────────────────────────────────────────
+def autostart_command(args) -> list[str]:
+    """The command that login should run: this script with the same options, marked as an automatic start."""
+    cmd = [python_for_autostart(), os.path.join(ROOT, "run_relay.py"), "--port", str(args.port), "--host", args.host,
+           "--data", os.path.abspath(args.data), "--autostart"]
+    cmd += ["--tunnel"] if args.tunnel else ["--tailscale"] if args.tailscale else []
+    cmd += ["--no-save"] if args.no_save else []
+    return cmd
+
+
+def python_for_autostart() -> str:
+    """On Windows, pythonw.exe runs without a console window popping up at every login."""
+    if platform.system() == "Windows":
+        w = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.exists(w):
+            return w
+    return sys.executable
+
+
+def autostart_log() -> str:
+    home = os.path.expanduser("~")
+    if platform.system() == "Darwin":
+        return os.path.join(home, "Library", "Logs", "ANSX Relay", "relay.log")
+    return os.path.join(home, ".ansx_vault", "relay.log")
+
+
+def launchd_plist(cmd: list[str], log: str, path_env: str) -> bytes:
+    return plistlib.dumps({
+        "Label": AUTOSTART_LABEL, "ProgramArguments": cmd, "WorkingDirectory": ROOT,
+        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,        # restarted if it ever stops
+        "StandardOutPath": log, "StandardErrorPath": log,
+        "EnvironmentVariables": {"PATH": path_env},       # login items get a bare PATH: keep tailscale/cloudflared findable
+    })
+
+
+def systemd_unit(cmd: list[str], path_env: str) -> str:
+    quoted = " ".join(f'"{c}"' if " " in c else c for c in cmd)
+    return (f"[Unit]\nDescription=ANSX relay\nAfter=network-online.target\n\n"
+            f"[Service]\nWorkingDirectory={ROOT}\nEnvironment=PATH={path_env}\nExecStart={quoted}\n"
+            f"Restart=on-failure\nRestartSec=30\n\n[Install]\nWantedBy=default.target\n")
+
+
+def windows_task_command(cmd: list[str], log: str) -> list[str]:
+    run = subprocess.list2cmdline(cmd + ["--log", log])
+    return ["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", AUTOSTART_TASK, "/TR", run]
+
+
+def _launchd_paths() -> tuple[str, str]:
+    agent = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents", AUTOSTART_LABEL + ".plist")
+    return agent, f"gui/{os.getuid()}"
+
+
+def _systemd_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".config", "systemd", "user", "ansx-relay.service")
+
+
+def install_autostart(args) -> int:
+    cmd, log, system = autostart_command(args), autostart_log(), platform.system()
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    path_env = os.environ.get("PATH", "")
+    if system == "Darwin":
+        agent, domain = _launchd_paths()
+        os.makedirs(os.path.dirname(agent), exist_ok=True)
+        subprocess.run(["launchctl", "bootout", f"{domain}/{AUTOSTART_LABEL}"], capture_output=True)   # replace an old one
+        with open(agent, "wb") as f:
+            f.write(launchd_plist(cmd, log, path_env))
+        r = subprocess.run(["launchctl", "bootstrap", domain, agent], capture_output=True, text=True)
+    elif system == "Linux":
+        unit = _systemd_path()
+        os.makedirs(os.path.dirname(unit), exist_ok=True)
+        with open(unit, "w") as f:
+            f.write(systemd_unit(cmd, path_env))
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        r = subprocess.run(["systemctl", "--user", "enable", "--now", "ansx-relay.service"], capture_output=True, text=True)
+    elif system == "Windows":
+        r = subprocess.run(windows_task_command(cmd, log), capture_output=True, text=True)
+    else:
+        sys.exit(f"Starting at login is not supported on {system}.")
+    if r.returncode != 0:
+        sys.exit(f"Could not register the relay to start at login: {(r.stderr or r.stdout).strip()}")
+    print("The relay will now start by itself whenever you log in"
+          + (" (and it has been started now)." if system != "Windows" else " (from your next login)."))
+    print(f"  runs:  {subprocess.list2cmdline(cmd)}\n  log:   {log if system != 'Linux' else 'journalctl --user -u ansx-relay'}")
+    print("  undo:  python run_relay.py --remove-autostart")
+    return 0
+
+
+def remove_autostart() -> int:
+    system = platform.system()
+    if system == "Darwin":
+        agent, domain = _launchd_paths()
+        subprocess.run(["launchctl", "bootout", f"{domain}/{AUTOSTART_LABEL}"], capture_output=True)
+        existed = os.path.exists(agent)
+        if existed:
+            os.remove(agent)
+    elif system == "Linux":
+        subprocess.run(["systemctl", "--user", "disable", "--now", "ansx-relay.service"], capture_output=True)
+        existed = os.path.exists(_systemd_path())
+        if existed:
+            os.remove(_systemd_path())
+    elif system == "Windows":
+        existed = subprocess.run(["schtasks", "/Delete", "/F", "/TN", AUTOSTART_TASK], capture_output=True).returncode == 0
+    else:
+        existed = False
+    print("The relay no longer starts at login." if existed else "The relay was not set to start at login.")
+    return 0
+
+
+def _keep_trying(step, autostart: bool):
+    """At login the network or Tailscale may not be up yet: an automatic start waits for them instead of giving up."""
+    while True:
+        try:
+            return step()
+        except SystemExit as exc:
+            if not autostart:
+                raise
+            print(f"{exc}\n(Started at login: trying again in 30 s.)")
+            time.sleep(30)
 
 
 def main() -> int:
@@ -277,7 +431,20 @@ def main() -> int:
     public.add_argument("--tailscale", action="store_true",
                         help="also publish a PERMANENT https address with Tailscale Funnel (needs Tailscale, signed in)")
     ap.add_argument("--no-save", action="store_true", help="do not save the public address as this computer's setting")
+    ap.add_argument("--install-autostart", action="store_true",
+                    help="start the relay (with these options) automatically at every login")
+    ap.add_argument("--remove-autostart", action="store_true", help="stop starting the relay at login")
+    ap.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)       # set by the login entry
+    ap.add_argument("--log", help=argparse.SUPPRESS)                                  # Windows login entry: output file
     args = ap.parse_args()
+    if args.remove_autostart:
+        return remove_autostart()
+    if args.log:                                  # the Windows login entry has no console: send all output to a file
+        os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
+        fd = os.open(args.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+        sys.stdout = sys.stderr = open(1, "w", buffering=1, closefd=False)
 
     ts_exe = ts_url = ""
     if args.tailscale:                            # check before starting anything, so a mistake costs nothing
@@ -285,7 +452,12 @@ def main() -> int:
         if not ts_exe:
             sys.exit(f"Tailscale is not installed.\nInstall it with:  {tailscale_install_hint()}")
         check_tailscale_version(ts_exe)
-        ts_url = tailscale_address(ts_exe)
+        if not args.install_autostart:            # at login the address is looked up then (Tailscale may start later)
+            ts_url = _keep_trying(lambda: tailscale_address(ts_exe), args.autostart)
+    if args.install_autostart:
+        if args.tunnel:
+            print("Note: a Cloudflare tunnel gets a NEW address at every login. Use --tailscale for one that stays the same.")
+        return install_autostart(args)
 
     local = f"http://127.0.0.1:{args.port}"
     relay = None                                  # stays None when we reuse a relay that is already running

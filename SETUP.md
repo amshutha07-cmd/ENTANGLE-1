@@ -73,6 +73,21 @@ The address is `https://<this-computer>.<your-tailnet>.ts.net` and stays the sam
 once. Only the computer running the relay needs Tailscale; everyone else just uses the address. The first time, Funnel may
 need to be allowed for your tailnet: the launcher prints Tailscale's link to switch it on.
 
+Once it works, you can make it start by itself whenever you log in (macOS, Windows and Linux):
+
+```bash
+python3 run_relay.py --tailscale --install-autostart    # starts now and at every login; restarts if it stops
+python3 run_relay.py --remove-autostart                 # undo
+```
+
+The log is in `~/Library/Logs/ANSX Relay/relay.log` on a Mac (Windows: `.ansx_vault\relay.log` in your user folder; Linux:
+`journalctl --user -u ansx-relay`). The relay is only reachable while this computer is on and awake.
+
+The permanent address is also written to `default_config.json` in this folder. The app uses it when nobody has entered
+an address yet, and `pyinstaller ANSxVault.spec` builds it into the installer, so people you give that installer to never
+type an address. The file is in `.gitignore`: commit it (`git add -f default_config.json`) only if you want everyone who
+can see the repository to have your relay's address.
+
 Then in another terminal: `python3 main.py`. To check that an installation is healthy at any time:
 `python3 main.py --self-test` (or `ANSxVault --self-test` for the packaged app).
 

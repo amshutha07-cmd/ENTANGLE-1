@@ -80,3 +80,76 @@ def test_old_tailscale_is_refused_with_an_update_hint(tmp_path, version, ok):
 def test_unreadable_version_does_not_block(tmp_path):
     exe, _ = _fake_tailscale(tmp_path, {}, version="unknown")
     assert run_relay.check_tailscale_version(exe) == "unknown"
+
+
+# ── start at login ───────────────────────────────────────────────────────────────────────────────
+import json as _json
+import os
+import plistlib
+from types import SimpleNamespace
+
+
+def _args(**kw):
+    base = dict(port=8000, host="127.0.0.1", data="relay_data", tunnel=False, tailscale=True, no_save=False)
+    return SimpleNamespace(**{**base, **kw})
+
+
+def test_login_entry_repeats_the_chosen_options():
+    cmd = run_relay.autostart_command(_args())
+    assert cmd[1].endswith("run_relay.py") and "--tailscale" in cmd and "--autostart" in cmd
+    assert os.path.isabs(cmd[cmd.index("--data") + 1])                    # works from any working directory
+    assert "--tunnel" in run_relay.autostart_command(_args(tailscale=False, tunnel=True))
+
+
+def test_macos_login_item_keeps_path_and_restarts(tmp_path, monkeypatch):
+    cmd = ["/usr/bin/python3", "/x/run_relay.py", "--tailscale", "--autostart"]
+    plist = plistlib.loads(run_relay.launchd_plist(cmd, "/tmp/r.log", "/opt/homebrew/bin:/usr/bin"))
+    assert plist["ProgramArguments"] == cmd and plist["RunAtLoad"] and plist["KeepAlive"]
+    assert plist["EnvironmentVariables"]["PATH"].startswith("/opt/homebrew/bin")     # tailscale is found at login
+
+    calls = []
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(run_relay.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(run_relay.subprocess, "run",
+                        lambda c, **k: calls.append(c) or SimpleNamespace(returncode=0, stdout="", stderr=""))
+    assert run_relay.install_autostart(_args()) == 0
+    agent = tmp_path / "Library" / "LaunchAgents" / "com.ansx.relay.plist"
+    assert "--tailscale" in plistlib.loads(agent.read_bytes())["ProgramArguments"]
+    assert calls[-1][:2] == ["launchctl", "bootstrap"] and calls[-1][-1] == str(agent)
+    run_relay.remove_autostart()
+    assert not agent.exists() and calls[-1][:2] == ["launchctl", "bootout"]
+
+
+def test_linux_and_windows_login_entries():
+    cmd = ["/usr/bin/python3", "/home/me/ANSX Vault/run_relay.py", "--tailscale", "--autostart"]
+    unit = run_relay.systemd_unit(cmd, "/usr/local/bin:/usr/bin")
+    assert 'ExecStart=/usr/bin/python3 "/home/me/ANSX Vault/run_relay.py" --tailscale' in unit and "Restart=on-failure" in unit
+    task = run_relay.windows_task_command([r"C:\Py\pythonw.exe", r"C:\ANSX Vault\run_relay.py", "--tailscale"], r"C:\l\relay.log")
+    assert task[:5] == ["schtasks", "/Create", "/F", "/SC", "ONLOGON"]
+    assert '"C:\\ANSX Vault\\run_relay.py"' in task[-1] and task[-1].endswith(r"--log C:\l\relay.log")
+
+
+def test_at_login_it_waits_for_tailscale_instead_of_giving_up(monkeypatch):
+    tries = []
+
+    def step():
+        tries.append(1)
+        if len(tries) < 3:
+            raise SystemExit("Tailscale is installed but not connected.")
+        return "https://vault-mac.tail1234.ts.net"
+
+    monkeypatch.setattr(run_relay.time, "sleep", lambda s: None)
+    assert run_relay._keep_trying(step, autostart=True) == "https://vault-mac.tail1234.ts.net" and len(tries) == 3
+    with pytest.raises(SystemExit):                                          # run by hand: say so and stop
+        run_relay._keep_trying(lambda: (_ for _ in ()).throw(SystemExit("no")), autostart=False)
+
+
+def test_permanent_address_is_built_into_the_app(tmp_path, monkeypatch):
+    (tmp_path / "default_config.json").write_text('{"relay_url": "https://old.example", "other": 1}')
+    run_relay.write_bundled_address("https://vault-mac.tail1234.ts.net", root=str(tmp_path))
+    data = _json.loads((tmp_path / "default_config.json").read_text())
+    assert data == {"relay_url": "https://vault-mac.tail1234.ts.net", "other": 1}    # other settings kept
+
+    import relay_config
+    monkeypatch.setattr(relay_config.os.path, "abspath", lambda p: str(tmp_path / "relay_config.py"))
+    assert relay_config.bundled_default() == "https://vault-mac.tail1234.ts.net"      # what a fresh install uses
