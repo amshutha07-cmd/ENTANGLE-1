@@ -8,7 +8,7 @@ from typing import Optional
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout,
+    QApplication, QFrame, QHBoxLayout, QMainWindow, QMenu, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout,
     QWidget,
 )
 
@@ -140,12 +140,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self._watcher)
         self._focus_visible = _FocusVisible()
         QApplication.instance().installEventFilter(self._focus_visible)
-        for i, (key, text, _i) in enumerate(NAV, start=1):
-            seq = QKeySequence(f"Ctrl+{i}")
-            QShortcut(seq, self, activated=lambda k=key: self._shortcut(k))
-            self.nav[key].setToolTip(f"{text}   {seq.toString(QKeySequence.SequenceFormat.NativeText)}")
-        QShortcut(QKeySequence("Ctrl+L"), self, activated=self._lock)
-        QShortcut(QKeySequence("Ctrl+O"), self, activated=self._protect_shortcut)
+        self._install_commands()
 
         if self.ctl.operator:                       # attached to a session that is already running: adopt its state
             self._session_started(self.ctl.operator)
@@ -227,8 +222,85 @@ class MainWindow(QMainWindow):
             return None
         tray = QSystemTrayIcon(icons.app_icon(), self)
         tray.setToolTip("A.N.Sx Vault")
+        menu = QMenu(self)
+        menu.addAction("Open A.N.Sx Vault", self.bring_to_front)
+        self._tray_lock = menu.addAction("Lock now", self._lock)
+        menu.addSeparator()
+        menu.addAction("Quit", self.close)                # goes through the "transfer still running?" check
+        menu.aboutToShow.connect(self._tray_menu_opening)
+        tray.setContextMenu(menu)
+        self._tray_menu = menu
+        tray.activated.connect(self._tray_clicked)
         tray.show()
         return tray
+
+    def _tray_menu_opening(self) -> None:
+        self._tray_lock.setEnabled(self.root_stack.currentIndex() == 1)
+
+    def _tray_clicked(self, reason) -> None:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.bring_to_front()
+
+    def bring_to_front(self) -> None:
+        """Show the window and give it focus (tray click, or the app launched a second time)."""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    # ── commands: one list, shown as a menu bar on macOS and as window shortcuts elsewhere ──
+    def _commands(self) -> list:
+        """(menu, label, shortcut, handler). Each shortcut is registered exactly once: a key bound twice does nothing."""
+        cmds = [("File", "Protect a File…", "Ctrl+O", self._protect_shortcut),
+                ("File", "Open a Package File…", "", self._open_package_command),
+                ("File", "Lock", "Ctrl+L", self._lock)]
+        for i, (key, text, _icon) in enumerate(NAV, start=1):
+            cmds.append(("Go", text, f"Ctrl+{i}", lambda _c=False, k=key: self._shortcut(k)))
+        cmds += [("Help", "Keyboard Shortcuts", "", self._show_shortcuts),
+                 ("Help", "About A.N.Sx Vault", "", self._about)]
+        return cmds
+
+    def _install_commands(self) -> None:
+        native = QKeySequence.SequenceFormat.NativeText
+        for i, (key, text, _icon) in enumerate(NAV, start=1):
+            self.nav[key].setToolTip(f"{text}   {QKeySequence(f'Ctrl+{i}').toString(native)}")
+        # The macOS global menu bar (where Mac users look for commands). Only on the real macOS display: elsewhere a
+        # menu bar would be drawn inside the window.
+        if QApplication.platformName() == "cocoa":
+            bar = self.menuBar()
+            menus: dict = {}
+            for menu, label_text, keys, fn in self._commands():
+                m = menus.get(menu) or menus.setdefault(menu, bar.addMenu(menu))
+                act = m.addAction(label_text)
+                if keys:
+                    act.setShortcut(QKeySequence(keys))
+                if label_text.startswith("About"):
+                    act.setMenuRole(act.MenuRole.AboutRole)   # macOS moves it into the app menu
+                act.triggered.connect(fn)
+            self._menus = menus
+        else:                                             # Windows / Linux: keep the window free of a menu bar
+            for _menu, _label, keys, fn in self._commands():
+                if keys:
+                    QShortcut(QKeySequence(keys), self, activated=fn)
+
+    def _open_package_command(self) -> None:
+        if self.root_stack.currentIndex() == 1:
+            self.go("inbox")
+            self.pages["inbox"]._open_package()
+
+    def _show_shortcuts(self) -> None:
+        if self.root_stack.currentIndex() == 1:
+            self.go("settings")
+            page = self.pages["settings"]
+            page.ensureWidgetVisible(page.shortcuts_card)
+
+    def _about(self) -> None:
+        from ui import dialogs
+        dialogs.info(self, "About A.N.Sx Vault",
+                     f"Version {APP_VERSION}\n\nSend files that only the right person can open. Files are encrypted on "
+                     "this computer, split into 12 pieces (any 8 rebuild them) and sealed for one person's key. "
+                     "The relay and cloud storage only ever see encrypted pieces.")
 
     def _wire(self) -> None:
         ctl = self.ctl

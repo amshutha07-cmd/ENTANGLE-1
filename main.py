@@ -91,6 +91,11 @@ def main() -> int:
     QCoreApplication.setApplicationName("A.N.Sx Vault")
     QCoreApplication.setOrganizationName("ANSX")
     app = QApplication(sys.argv)
+    import paths
+    import single_instance
+    instance = single_instance.server_name(paths.vault_home())
+    if single_instance.notify_running(instance):         # already open: that window comes to the front instead
+        return 0
     from ui import icons
     app.setWindowIcon(icons.app_icon())                   # Dock / taskbar / window icon (not the Python rocket)
 
@@ -108,7 +113,10 @@ def main() -> int:
     from ui.main_window import MainWindow
     win = MainWindow()
     win.show()
-    return app.exec()
+    server = single_instance.listen(instance, win.bring_to_front)   # later launches just raise this window
+    code = app.exec()
+    del server
+    return code
 
 
 if __name__ == "__main__":

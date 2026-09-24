@@ -141,7 +141,7 @@ class SettingsPage(Page):
         self.root.addWidget(app)
 
         # ── keyboard shortcuts ──
-        keys = Card(padding=20, spacing=6)
+        keys = self.shortcuts_card = Card(padding=20, spacing=6)
         keys.body.addWidget(label("Keyboard shortcuts", "h2", wrap=False))
 
         def native(seq: str) -> str:
