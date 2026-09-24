@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from security_core import SecurityCore
-from ui import icons, theme
+from ui import theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (

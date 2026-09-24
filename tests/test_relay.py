@@ -1,5 +1,4 @@
 """End-to-end tests: RelayClient against a REAL relay server (uvicorn on a local port)."""
-import hashlib
 import os
 import socket
 import threading
@@ -279,7 +278,7 @@ def test_cancel_callback_stops_send(server, users, tmp_path):
 
 
 def test_network_errors_are_retried(server, users, tmp_path, monkeypatch):
-    alice, bob = users["alice"][0], users["bob"][0]
+    bob = users["bob"][0]
     src = _file(tmp_path, 9000)
     real = requests.Session.request
     state = {"fail": 3}

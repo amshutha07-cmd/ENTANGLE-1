@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 
 import cloud_dispatcher
 from ui import icons, theme
-from ui.widgets import clear_layout, Banner, Button, IconBadge, label, polish
+from ui.widgets import clear_layout, Banner, Button, IconBadge, label
 
 
 def confirm(parent, title: str, text: str, ok: str = "Confirm", danger: bool = False, cancel: str = "Cancel") -> bool:

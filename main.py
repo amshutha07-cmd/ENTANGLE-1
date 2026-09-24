@@ -7,13 +7,14 @@ Environment: ANSX_RELAY_URL (relay address; can also be set in Settings), ANSX_V
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6.QtCore import QCoreApplication, Qt
+from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S")
@@ -55,12 +56,12 @@ def self_test() -> int:
     def crypto():
         from cryptography.hazmat.primitives.asymmetric import rsa
         rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        import ghost_map  # noqa: F401
+        importlib.import_module("ghost_map")          # the package format loads
         return "RSA + AES-GCM available"
 
     def qt():
         from PyQt6.QtCore import PYQT_VERSION_STR
-        from PyQt6 import QtSvg  # noqa: F401  (icons)
+        importlib.import_module("PyQt6.QtSvg")        # icons need SVG support
         return f"PyQt6 {PYQT_VERSION_STR} with SVG support"
 
     def keys():

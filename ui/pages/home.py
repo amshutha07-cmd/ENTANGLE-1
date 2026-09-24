@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 import platform_secret
 from ui import icons, theme
 from ui.pages.base import Page
-from ui.widgets import clear_layout, Banner, Button, Card, ClickableCard, EmptyState, IconBadge, Pill, label, time_ago
+from ui.widgets import clear_layout, Button, Card, ClickableCard, EmptyState, IconBadge, Pill, label, time_ago
 
 ACTIVITY_STYLE = {
     "protected": ("shield", "success"), "sent": ("send", "primary"), "delivered": ("check", "success"),

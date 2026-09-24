@@ -86,7 +86,7 @@ def update_settings(broker_addr: str, registry_addr: str):
     with open(settings_path, "w") as f:
         f.writelines(lines)
 
-    print(f"\n  settings.py updated:")
+    print("\n  settings.py updated:")
     print(f"    SESSION_BROKER_ADDRESS = \"{broker_addr}\"")
     print(f"    ANSX_REGISTRY_ADDRESS  = \"{registry_addr}\"")
 
@@ -110,7 +110,7 @@ def main():
     print(f"  Balance:  {balance:.4f} MATIC")
 
     if balance < 0.01:
-        print(f"\n  ERROR: Insufficient MATIC. Get free MATIC from:")
+        print("\n  ERROR: Insufficient MATIC. Get free MATIC from:")
         print(f"    https://faucet.polygon.technology/?network=amoy&address={account.address}")
         sys.exit(1)
 

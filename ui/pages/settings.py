@@ -1,12 +1,10 @@
 """ui/pages/settings.py — connection, cloud storage, appearance and security details."""
 from __future__ import annotations
 
-from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
-import cloud_dispatcher
 import engine
 import paths
 import platform_secret
@@ -16,7 +14,7 @@ from ui.controller import pref, set_pref
 from ui.dialogs import StorageDialog, confirm
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
-from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, Pill, label
+from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, label
 
 AUTO_LOCK_CHOICES = [("Never", 0), ("After 5 minutes", 5), ("After 10 minutes", 10), ("After 30 minutes", 30), ("After 1 hour", 60)]
 
@@ -186,8 +184,8 @@ class SettingsPage(Page):
         if res["secure"]:
             self.relay_msg.set(f"Connected. Files up to {mb} MB, kept up to {res['limits']['ttl_seconds'] // 86400} days.", "success")
         else:
-            self.relay_msg.set(f"Connected, but this address is not encrypted (http). Your files stay end-to-end encrypted, "
-                               f"but who you talk to and when is visible on the network. Use https:// for real use.", "warning")
+            self.relay_msg.set("Connected, but this address is not encrypted (http). Your files stay end-to-end encrypted, "
+                               "but who you talk to and when is visible on the network. Use https:// for real use.", "warning")
 
     def _relay_bad(self, message: str) -> None:
         self.relay_test.setEnabled(True)

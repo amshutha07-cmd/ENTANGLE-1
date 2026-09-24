@@ -33,7 +33,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from cryptography.exceptions import InvalidSignature

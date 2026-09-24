@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QL
 from ui.dialogs import confirm, info
 from ui.pages.base import Page
 from ui.widgets import (
-    Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, label,
+    Avatar, Banner, Button, Card, EmptyState, Fingerprint, ListRow, Pill, label,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),

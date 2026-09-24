@@ -20,9 +20,7 @@ Flow:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
 from typing import Optional
 
@@ -391,7 +389,6 @@ class SessionBrokerClient:
             return False
 
         try:
-            from web3 import Web3
             account = self._w3.eth.account.from_key(private_key)
             nonce   = self._w3.eth.get_transaction_count(account.address)
 
