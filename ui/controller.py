@@ -122,6 +122,13 @@ class AppController(QObject):
         job.start()
         return job
 
+    WORK_JOBS = ("protect", "send", "accept", "restore", "open-package")
+
+    def busy(self) -> bool:
+        """Is work someone would lose still running (protecting, sending, receiving, restoring)? Background lookups
+        such as refreshing the directory do not count."""
+        return any(j.isRunning() and j.name in self.WORK_JOBS for j in list(self._jobs))
+
     def wait_for_jobs(self, ms: int = 5000) -> None:
         for j in list(self._jobs):
             j.cancel()
@@ -505,7 +512,39 @@ class AppController(QObject):
             return {"id": tid, "to": recipient}
         return Job(work, "send")
 
-    def after_send(self, entry: dict, recipient: str) -> None:
+    # The relay only knows "a package for sam"; remember locally which file each transfer carried, so the Sent list
+    # can say "Q3 board deck.pdf → sam". Kept next to the vault list (same private folder), newest 500 only.
+    @staticmethod
+    def _sent_names_path() -> str:
+        return os.path.join(paths.vault_home(), "sent_names.json")
+
+    def sent_file_name(self, transfer_id: str) -> str:
+        import json
+        try:
+            with open(self._sent_names_path()) as f:
+                return str(json.load(f).get(transfer_id, {}).get("file", ""))
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def remember_sent(self, transfer_id: str, file_name: str) -> None:
+        import json
+        from security_core import _atomic_write_json
+        try:
+            with open(self._sent_names_path()) as f:
+                names = json.load(f)
+            if not isinstance(names, dict):
+                names = {}
+        except (OSError, ValueError):
+            names = {}
+        names[transfer_id] = {"file": file_name, "owner": self.operator or ""}
+        if len(names) > 500:
+            names = dict(list(names.items())[-500:])
+        os.makedirs(paths.vault_home(), mode=0o700, exist_ok=True)
+        _atomic_write_json(self._sent_names_path(), names)
+
+    def after_send(self, entry: dict, recipient: str, transfer_id: str = "") -> None:
+        if transfer_id:
+            self.remember_sent(transfer_id, entry.get("original_filename", ""))
         activity.add("sent", f"Sent {entry['original_filename']} to {recipient}", operator=self.operator or "")
         self.activity_changed.emit()
 

@@ -256,6 +256,18 @@ class Button(QPushButton):
         self._icon_name = name
         self.refresh_icon()
 
+    def setToolTip(self, tip: str) -> None:                  # noqa: N802 - Qt naming
+        """An icon-only button is named by its tooltip, so screen readers say "Remove from my vault", not "button"."""
+        super().setToolTip(tip)
+        if not self.text():
+            self.setAccessibleName(tip)
+
+    def set_variant(self, variant: str) -> None:
+        if self.property("variant") != variant:
+            self.setProperty("variant", variant)
+            polish(self)
+            self.refresh_icon()
+
     def refresh_icon(self) -> None:
         if not self._icon_name:
             return
@@ -544,12 +556,12 @@ class SectionHeader(QWidget):
 
 
 class KeyValue(QWidget):
-    def __init__(self, key: str, value: str = "", mono: bool = False, parent=None):
+    def __init__(self, key: str, value: str = "", mono: bool = False, parent=None, key_width: int = 110):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 2, 0, 2)
         k = label(key, "muted", wrap=False)
-        k.setMinimumWidth(110)
+        k.setMinimumWidth(key_width)
         self.value = label(value, "mono" if mono else "body", selectable=True)
         lay.addWidget(k, 0, Qt.AlignmentFlag.AlignTop)
         lay.addWidget(self.value, 1)

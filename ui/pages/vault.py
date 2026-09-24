@@ -6,12 +6,12 @@ from typing import Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from ui.controller import Job
 from ui.dialogs import confirm
 from ui.pages.base import Page
-from ui import motion
+from ui import motion, theme
 from ui.widgets import (
     clear_layout,
     Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
@@ -87,7 +87,17 @@ class VaultPage(Page):
         self.result.hide()
         self.root.addWidget(self.result)
 
-        self.root.addWidget(label("YOUR PROTECTED FILES", "eyebrow", wrap=False))
+        head = QHBoxLayout()
+        head.addWidget(label("YOUR PROTECTED FILES", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Search your files")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.setMaximumWidth(260)
+        self.filter.textChanged.connect(lambda _t: self.refresh())
+        self.filter.hide()                                # only once the list is long enough to need it
+        head.addWidget(self.filter)
+        self.root.addLayout(head)
+        self._flash_id: Optional[str] = None
         self.list_card = Card(padding=6, spacing=0)
         self.root.addWidget(self.list_card)
         self.root.addStretch(1)
@@ -124,6 +134,8 @@ class VaultPage(Page):
         self.ctl.after_protect(res)
         name = res.entry["original_filename"]
         self._last_protected = res.entry["id"]
+        self._flash_id = res.entry["id"]
+        self.refresh()
         self.result._btn.show()
         if res.storage_configured and res.upload_errors:
             msg = (f"“{name}” is protected, but {len(res.upload_errors)} piece(s) could not be uploaded, so they are kept "
@@ -165,17 +177,26 @@ class VaultPage(Page):
     def refresh(self) -> None:
         lay = self.list_card.body
         clear_layout(lay)
-        entries = self.ctl.vault_entries()
-        if not entries:
+        everything = self.ctl.vault_entries()
+        self.filter.setVisible(len(everything) > 6 or bool(self.filter.text()))
+        needle = self.filter.text().strip().lower()
+        entries = [e for e in everything if needle in e["original_filename"].lower()]
+        if not everything:
             lay.addWidget(EmptyState("shield", "No protected files yet",
                                      "Drop a file above. You can then send it, or restore it any time."))
             return
+        if not entries:
+            lay.addWidget(EmptyState("search", "No match", f"None of your files is called “{needle}”."))
+            return
+        flash, self._flash_id = self._flash_id, None
         for e in entries:
             row = VaultRow(e)
             row.send_clicked.connect(self.send_requested)
             row.restore_clicked.connect(self._restore)
             row.remove_clicked.connect(self._remove)
             lay.addWidget(row)
+            if e["id"] == flash:                          # the file just protected: show where it landed
+                motion.later(60, lambda r=row: motion.flash(r, theme.color("primary_soft")))
 
     def _restore(self, entry_id: str) -> None:
         from security_core import VaultLedger

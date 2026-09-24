@@ -48,6 +48,10 @@ class InboxPage(Page):
         self._job: Optional[Job] = None
         self._current: Optional[dict] = None
 
+        self.add_connection_banner({
+            "offline": "You're offline. Files people send you will appear here as soon as the connection is back.",
+            "conflict": "Receiving is turned off: this relay already has a different key under your name."})
+        self.refresh_while_visible(lambda: self._job is None and self._fill_inbox())   # Sent uses fixed dates
         self.open_btn = Button("Open a package file…", "ghost", "folder", "sm")
         self.open_btn.setToolTip("For a package you received outside the relay (USB stick, chat, e-mail).")
         self.open_btn.clicked.connect(self._open_package)
@@ -161,6 +165,7 @@ class InboxPage(Page):
             b.refresh_icon()
 
     def on_show(self) -> None:
+        self._show_connection(self.ctl.relay_state)
         self._fill_inbox(self.ctl.inbox)
         self._fill_sent(self.ctl.outbox)
 
@@ -232,6 +237,9 @@ class InboxPage(Page):
             b.set(f"You haven't verified {it['from']}'s key. Compare the fingerprint above with them by phone before "
                   "opening anything sensitive.", "warning")
             b._btn.setVisible(trust == "unverified")
+        # A changed key is the one case where accepting should not be the obvious, highlighted choice.
+        self.accept_btn.set_variant("secondary" if trust == "changed" else "primary")
+        self.accept_btn.setText("Accept anyway" if trust == "changed" else "Accept and open")
         busy = self._job is not None
         self.accept_btn.setEnabled(not busy)
         self.decline_btn.setEnabled(not busy)
@@ -337,8 +345,10 @@ class InboxPage(Page):
             li.setSizeHint(QSize(0, 62))
             li.setData(Qt.ItemDataRole.UserRole, it)
             self.sent_list.addItem(li)
-            self.sent_list.setItemWidget(li, ListRow(f"To {it['to']}", f"{human_size(it['size'])} · {when}",
-                                                     avatar=it["to"], right=right))
+            name = self.ctl.sent_file_name(it["id"])
+            title, sub = ((name, f"To {it['to']} · {human_size(it['size'])} · {when}") if name
+                          else (f"To {it['to']}", f"{human_size(it['size'])} · {when}"))
+            self.sent_list.setItemWidget(li, ListRow(title, sub, avatar=it["to"], right=right))
         self.sent_list.setVisible(bool(items))
         self.sent_empty.setVisible(not items)
         self.cancel_out_btn.hide()

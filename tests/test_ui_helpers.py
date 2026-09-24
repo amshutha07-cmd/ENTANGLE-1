@@ -218,3 +218,33 @@ def test_a_revealed_passphrase_is_hidden_again_for_the_next_person():
     assert lv.pass_edit.echoMode() == QLineEdit.EchoMode.Normal
     lv.refresh()                                             # the sign-in screen is shown again (e.g. after locking)
     assert lv.pass_edit.echoMode() == QLineEdit.EchoMode.Password
+
+
+def test_focus_rings_appear_only_for_keyboard_use():
+    import time
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QPushButton
+    from security_core import SecurityCore
+    from ui.controller import AppController
+    from ui.main_window import MainWindow
+    SecurityCore._publish_identity = classmethod(lambda cls, *a, **k: None)
+    SecurityCore.establish_identity("focus_user", "a long passphrase focus", auth="passphrase")
+    ctl = AppController()
+    ctl.operator = "focus_user"
+    win = MainWindow(ctl)
+    win.resize(1200, 800)
+    win.show()
+    win.activateWindow()
+    win._session_started("focus_user")                      # the sign-in field disappears: Qt moves focus along
+
+    def settle():
+        end = time.time() + 0.3
+        while time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+    settle()
+    assert not isinstance(QApplication.focusWidget(), QPushButton)   # no ring nobody asked for
+    QTest.keyClick(win, Qt.Key.Key_Tab)
+    settle()
+    assert isinstance(QApplication.focusWidget(), QPushButton)       # Tab: a ring shows where you are

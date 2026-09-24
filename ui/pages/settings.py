@@ -36,6 +36,7 @@ class StorageRow(QWidget):
         lay.addLayout(col, 1)
         edit = Button("Edit", "secondary", size="sm")
         rm = Button("", "ghost", "trash", "sm")
+        rm.setToolTip("Remove this storage account")
         edit.clicked.connect(lambda: on_edit(target))
         rm.clicked.connect(lambda: on_remove(target))
         lay.addWidget(edit)
@@ -138,6 +139,23 @@ class SettingsPage(Page):
         r.addWidget(self.motion_combo)
         app.body.addLayout(r)
         self.root.addWidget(app)
+
+        # ── keyboard shortcuts ──
+        keys = Card(padding=20, spacing=6)
+        keys.body.addWidget(label("Keyboard shortcuts", "h2", wrap=False))
+
+        def native(seq: str) -> str:
+            from PyQt6.QtGui import QKeySequence
+            return QKeySequence(seq).toString(QKeySequence.SequenceFormat.NativeText)
+        for what, seq in (("Home, Protect, Send", f"{native('Ctrl+1')}  {native('Ctrl+2')}  {native('Ctrl+3')}"),
+                          ("Inbox, People, Settings", f"{native('Ctrl+4')}  {native('Ctrl+5')}  {native('Ctrl+6')}"),
+                          ("Protect a file", native("Ctrl+O")),
+                          ("Lock now", native("Ctrl+L")),
+                          ("Move between buttons", "Tab  /  Shift+Tab")):
+            kv = KeyValue(what, seq, key_width=190)
+            keys.body.addWidget(kv)
+        keys.body.addWidget(label("You can also drop a file anywhere on the window to protect it.", "muted"))
+        self.root.addWidget(keys)
 
         # ── security details ──
         sec = Card(padding=20, spacing=6)

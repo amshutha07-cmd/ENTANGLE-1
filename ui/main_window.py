@@ -5,10 +5,11 @@ import logging
 import os
 from typing import Optional
 
-from PyQt6.QtCore import QEvent, QObject, QTimer
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QMainWindow, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout,
+    QWidget,
 )
 
 import engine
@@ -43,6 +44,45 @@ class _ActivityWatcher(QObject):
         return False
 
 
+class _FocusVisible(QObject):
+    """
+    Focus rings only while someone is using the keyboard (like the web's :focus-visible). Buttons never take focus from
+    a click, but the first button can receive focus when the window opens, and a ring from earlier Tabbing would
+    otherwise stay on screen while the mouse is used. A mouse click clears focus from buttons; Tab brings it back.
+    """
+
+    KEYBOARD = (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason, Qt.FocusReason.ShortcutFocusReason)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t == QEvent.Type.MouseButtonPress:
+            drop_button_focus()
+        elif t == QEvent.Type.FocusIn and _is_button(obj) and ev.reason() not in self.KEYBOARD:
+            # Focus landed on a button without Tab (a field it followed was hidden, a page changed, the window
+            # opened): drop it on the next turn of the event loop, so no ring appears that nobody asked for.
+            QTimer.singleShot(0, lambda o=obj: _clear_if_focused(o))
+        return False
+
+
+def _is_button(w) -> bool:
+    from ui.widgets import ClickableCard
+    return isinstance(w, (QPushButton, ClickableCard))
+
+
+def _clear_if_focused(w) -> None:
+    try:
+        if QApplication.focusWidget() is w:
+            w.clearFocus()
+    except RuntimeError:                                   # deleted in the meantime
+        pass
+
+
+def drop_button_focus() -> None:
+    w = QApplication.focusWidget()
+    if _is_button(w):
+        w.clearFocus()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, ctl: Optional[AppController] = None):
         super().__init__()
@@ -51,6 +91,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)                      # drop a file anywhere to protect it
         self.setMinimumSize(980, 680)
         self.resize(1200, 800)
+        self._restore_window_place()
 
         root = QWidget()
         root.setObjectName("Root")
@@ -92,8 +133,13 @@ class MainWindow(QMainWindow):
         self._idle = QTimer(self)
         self._idle.setSingleShot(True)
         self._idle.timeout.connect(self._idle_lock)
+        self._idle_warn = QTimer(self)                 # a heads-up shortly before locking
+        self._idle_warn.setSingleShot(True)
+        self._idle_warn.timeout.connect(self._idle_warning)
         self._watcher = _ActivityWatcher(self._activity)
         QApplication.instance().installEventFilter(self._watcher)
+        self._focus_visible = _FocusVisible()
+        QApplication.instance().installEventFilter(self._focus_visible)
         for i, (key, text, _i) in enumerate(NAV, start=1):
             seq = QKeySequence(f"Ctrl+{i}")
             QShortcut(seq, self, activated=lambda k=key: self._shortcut(k))
@@ -143,7 +189,7 @@ class MainWindow(QMainWindow):
         col.addWidget(self.chip_name)
         col.addWidget(self.chip_state)
         lock = Button("", "ghost", "lock", "sm")
-        lock.setToolTip("Lock (Ctrl+L)")
+        lock.setToolTip(f"Lock now   {QKeySequence('Ctrl+L').toString(QKeySequence.SequenceFormat.NativeText)}")
         lock.clicked.connect(self._lock)
         cl.addWidget(self.chip_avatar)
         cl.addLayout(col, 1)
@@ -238,6 +284,36 @@ class MainWindow(QMainWindow):
         self.go("vault")
         vault.protect_file(path)
 
+    # ── reopen where it was ──────────────────────────────────────────────────
+    def _save_window_place(self) -> None:
+        g = self.normalGeometry() if self.isMaximized() else self.geometry()
+        set_pref("window_place", {"x": g.x(), "y": g.y(), "w": g.width(), "h": g.height(), "max": self.isMaximized()})
+
+    def _restore_window_place(self) -> None:
+        """Back to last time's size and place, but only if that still fits on a screen (a monitor may be gone)."""
+        from PyQt6.QtCore import QPoint, QRect
+        from PyQt6.QtGui import QGuiApplication
+        p = pref("window_place", None)
+        if not isinstance(p, dict):
+            return
+        try:
+            rect = QRect(int(p["x"]), int(p["y"]), int(p["w"]), int(p["h"]))
+        except (KeyError, TypeError, ValueError):
+            return
+        screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.screenAt(QPoint(rect.x() + 40, rect.y() + 20))
+        if screen is None or rect.width() < self.minimumWidth() or rect.height() < self.minimumHeight():
+            return
+        room = screen.availableGeometry()
+        if rect.width() > room.width() or rect.height() > room.height():
+            return
+        self.setGeometry(rect)
+        if p.get("max"):
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        QTimer.singleShot(0, drop_button_focus)        # Qt focuses the first button on open: no ring until Tab
+
     def _set_waiting(self, n: int) -> None:
         """Inbox count on the sidebar badge and in the window title (seen in the taskbar / window list)."""
         self.nav["inbox"].set_badge(n)
@@ -275,6 +351,7 @@ class MainWindow(QMainWindow):
 
     def _session_ended(self) -> None:
         self._idle.stop()
+        self._idle_warn.stop()
         for page in self.pages.values():
             page.on_session_ended()
         self._set_waiting(0)
@@ -284,10 +361,22 @@ class MainWindow(QMainWindow):
         if self.root_stack.currentIndex() == 1:
             self.ctl.logout()
 
+    IDLE_WARNING_S = 30
+
     def _idle_lock(self) -> None:
-        if self.ctl.operator:
-            self.ctl.logout()
-            self.toasts_show("Locked after a period of inactivity.", "info")
+        if not self.ctl.operator:
+            return
+        if self.ctl.busy():
+            # Locking cancels running jobs: never cut off a transfer someone walked away from. Check again shortly.
+            self._idle.start(60 * 1000)
+            return
+        self.ctl.logout()
+        self.toasts_show("Locked after a period of inactivity.", "info")
+
+    def _idle_warning(self) -> None:
+        if self.ctl.operator and not self.ctl.busy():
+            self.toasts.show_toast(f"Locking in {self.IDLE_WARNING_S} seconds because you've been away. "
+                                   "Move the mouse or press a key to stay unlocked.", "warning", 10000)
 
     def _activity(self) -> None:
         if not self.ctl.operator:
@@ -295,8 +384,11 @@ class MainWindow(QMainWindow):
         mins = int(pref("auto_lock_minutes", 10) or 0)
         if mins > 0:
             self._idle.start(mins * 60 * 1000)
+            if mins * 60 > self.IDLE_WARNING_S * 2:
+                self._idle_warn.start((mins * 60 - self.IDLE_WARNING_S) * 1000)
         else:
             self._idle.stop()
+            self._idle_warn.stop()
 
     # ── status / feedback ────────────────────────────────────────────────────
     def toasts_show(self, message: str, kind: str = "info") -> None:
@@ -354,6 +446,14 @@ class MainWindow(QMainWindow):
 
     # ── shutdown ─────────────────────────────────────────────────────────────
     def closeEvent(self, event) -> None:
+        if self.ctl.busy() and self.isVisible():
+            from ui import dialogs
+            if not dialogs.confirm(self, "Quit while a transfer is running?",
+                                   "A file is still being protected, sent or received. Quitting now cancels it.",
+                                   ok="Quit anyway", danger=True, cancel="Keep working"):
+                event.ignore()
+                return
+        self._save_window_place()
         try:
             self.ctl.logout()
         finally:

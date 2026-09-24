@@ -119,6 +119,7 @@ class HomePage(Page):
         self.root.addStretch(1)
 
         ctl.relay_state_changed.connect(lambda *_: self.refresh())
+        self.refresh_while_visible(self._fill_activity)
         ctl.inbox_changed.connect(lambda *_: self.refresh())
         ctl.activity_changed.connect(self.refresh)
         ctl.vault_changed.connect(self.refresh)

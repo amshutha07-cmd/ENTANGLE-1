@@ -100,6 +100,34 @@ def fade_in(w: QWidget, ms: int = NORMAL, start: float = 0.0) -> None:
     anim.start()
 
 
+def flash(w: QWidget, color: str, ms: int = 1400) -> None:
+    """Briefly tint a widget's background, then fade back: "this is the new one"."""
+    if reduced() or w is None:
+        return
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QColor
+    w.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    base = QColor(color)
+    name = w.objectName() or "ansxFlash"
+    w.setObjectName(name)
+    anim = QVariantAnimation(w)
+    anim.setDuration(ms)
+    anim.setStartValue(0.0)
+    anim.setKeyValueAt(0.15, 1.0)
+    anim.setEndValue(0.0)
+    anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+    def paint(v) -> None:
+        c = QColor(base)
+        c.setAlphaF(max(0.0, min(1.0, float(v))) * base.alphaF())
+        w.setStyleSheet(f"#{name} {{ background: rgba({c.red()},{c.green()},{c.blue()},{c.alpha()}); "
+                        f"border-radius: 10px; }}")
+    anim.valueChanged.connect(paint)
+    anim.finished.connect(lambda: w.setStyleSheet(""))
+    _keep(w, anim, "_ansx_flash_anim")
+    anim.start()
+
+
 def reveal(w: QWidget, ms: int = NORMAL) -> None:
     """show() plus a quick fade, for messages and result panels that appear in place."""
     w.show()

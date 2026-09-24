@@ -22,6 +22,16 @@ TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified"
               "unknown": ("New", "neutral"), "changed": ("Key changed", "danger")}
 
 
+SEARCH_FROM = 6          # show a search box once there are more files than this
+
+
+def _fit_rows(lst, most: int = 6, row: int = 62) -> None:
+    """A list as tall as its rows (up to `most`, then it scrolls) instead of a fixed three-row window."""
+    h = min(max(lst.count(), 1), most) * row + 2 * lst.frameWidth() + 4
+    lst.setMinimumHeight(h)
+    lst.setMaximumHeight(h)
+
+
 class SendPage(Page):
     navigate = pyqtSignal(str)
 
@@ -32,6 +42,11 @@ class SendPage(Page):
         self.step = 0
         self._job: Optional[Job] = None
 
+        self.add_connection_banner({
+            "offline": "You're offline, so nothing can be sent right now. You can still pick a file and a person; "
+                       "sending works again as soon as the relay is reachable.",
+            "conflict": "Sending is turned off: this relay already has a different key under your name. "
+                        "Use a different relay, or ask its administrator."})
         self.stepper = Stepper(["Choose a file", "Choose a person", "Review and send"])
         self.root.addWidget(self.stepper)
         self.card = Card(padding=24, spacing=14)
@@ -46,6 +61,12 @@ class SendPage(Page):
         l0.setSpacing(10)
         self.files_heading = label("Which file do you want to send?", "h2")
         l0.addWidget(self.files_heading)
+        self.file_search = QLineEdit()
+        self.file_search.setPlaceholderText("Search your files")
+        self.file_search.setClearButtonEnabled(True)
+        self.file_search.textChanged.connect(lambda _t: self._fill_files())
+        self.file_search.hide()                          # only worth having once the list is long
+        l0.addWidget(self.file_search)
         self.files = QListWidget()
         self.files.itemSelectionChanged.connect(self._file_picked)
         self.files.itemDoubleClicked.connect(lambda _i: self._next())
@@ -176,6 +197,7 @@ class SendPage(Page):
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def on_show(self) -> None:
+        self._show_connection(self.ctl.relay_state)
         self._fill_files()
         self._fill_people()
         self._go(self.step if self.step < 3 else 0)
@@ -205,7 +227,10 @@ class SendPage(Page):
     def _fill_files(self) -> None:
         self.files.blockSignals(True)
         self.files.clear()
-        entries = self.ctl.vault_entries()
+        everything = self.ctl.vault_entries()
+        needle = self.file_search.text().strip().lower()
+        entries = [e for e in everything if needle in e["original_filename"].lower()]
+        self.file_search.setVisible(len(everything) > SEARCH_FROM)
         for e in entries:
             it = QListWidgetItem()
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
@@ -217,9 +242,14 @@ class SendPage(Page):
             if e["id"] == self.entry_id:
                 self.files.setCurrentItem(it)
         self.files.blockSignals(False)
+        _fit_rows(self.files)
         self.files.setVisible(bool(entries))
-        self.files_heading.setVisible(bool(entries))
+        self.files_heading.setVisible(bool(everything))
         self.files_empty.setVisible(not entries)
+        if everything and not entries:
+            self.files_empty.set_text("No match", f"None of your files is called “{needle}”.")
+        else:
+            self.files_empty.set_text("Nothing to send yet", "Protect a file first, then come back here to send it.")
         if self.step == 0:
             self.next_btn.setVisible(bool(entries))          # nothing to continue with: the empty state's button leads
         self._update_nav()
@@ -242,6 +272,7 @@ class SendPage(Page):
                 self.people.setCurrentItem(it)
         self.people.blockSignals(False)
         have = bool(contacts)
+        _fit_rows(self.people)
         self.people.setVisible(have)
         self.people_empty.setVisible(not have)
         self.search.setVisible(bool(self.ctl.contacts()))
@@ -356,7 +387,7 @@ class SendPage(Page):
     def _sent(self, entry: dict, result: dict) -> None:
         self._job = None
         self.progress.finish()
-        self.ctl.after_send(entry, result["to"])
+        self.ctl.after_send(entry, result["to"], result.get("id", ""))
         self.done_title.setText(f"Sent to {result['to']}")
         self.done_text.setText(f"“{entry['original_filename']}” is in {result['to']}'s inbox. They choose whether to accept it, "
                                "and you'll get a notification when they do.")
