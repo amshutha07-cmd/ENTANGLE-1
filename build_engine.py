@@ -81,6 +81,22 @@ if __name__ == "__main__":
     import ctypes
 
     if sys.platform.startswith("win"):
-        os.add_dll_directory(r"C:\msys64\mingw64\bin")
+        dll_dirs = []
+
+        # Allow the user to specify their MSYS2 MinGW64 bin directory.
+        if os.environ.get("MSYS2_MINGW64"):
+            dll_dirs.append(os.environ["MSYS2_MINGW64"])
+
+        # Common MSYS2 installation locations.
+        dll_dirs.extend([
+            r"C:\msys64\mingw64\bin",
+            r"C:\msys64\ucrt64\bin",
+            r"C:\msys64\clang64\bin",
+        ])
+
+        for dll_dir in dll_dirs:
+            if os.path.isdir(dll_dir):
+                os.add_dll_directory(dll_dir)
+                break
 
     print(f"built {os.path.basename(path)} (engine v{ctypes.CDLL(path).ansx_engine_version()})")
