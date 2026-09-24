@@ -14,7 +14,7 @@ from ui import motion, theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
-    add_reveal_toggle,
+    add_reveal_toggle, escape_goes_back,
     FitStack,
     Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish,
 )
@@ -247,7 +247,9 @@ class CreateView(_Center):
         c.addStretch(1)
         c.addWidget(brand_header())
         self.stepper = Stepper(["Your name", "How you unlock", "Create"])
+        self.stepper.step_clicked.connect(self._step_clicked)
         c.addWidget(self.stepper)
+        escape_goes_back(self, self._escape_back)
 
         self.card = Card(padding=24, spacing=14)
         self.stack = FitStack()                         # the card fits the current step instead of the tallest one
@@ -453,6 +455,7 @@ class CreateView(_Center):
         self.step = i
         self.stack.setCurrentIndex(i)
         self.stepper.set_current(i)
+        self.stepper.clickable = i == 1                     # step 3 is creating / created: no way back
         self.back_btn.setVisible(i < 2 and (i > 0 or bool(self.ctl.operators())))
         self.next_btn.setVisible(i < 2)
         self.next_btn.setText("Continue" if i == 0 else "Create my identity")
@@ -466,6 +469,14 @@ class CreateView(_Center):
             self._back_to_login()
         else:
             self._go(self.step - 1)
+
+    def _escape_back(self) -> None:
+        if self._job is None and (self.step == 1 or (self.step == 0 and self.ctl.operators())):
+            self._back()
+
+    def _step_clicked(self, i: int) -> None:
+        if self.step == 1 and self._job is None:            # once creating has started there is no going back
+            self._go(i)
 
     def _next(self) -> None:
         if not self._valid():

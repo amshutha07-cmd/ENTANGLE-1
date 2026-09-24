@@ -40,3 +40,14 @@ def live_relay(tmp_path_factory):
             time.sleep(0.05)
     yield f"http://127.0.0.1:{port}"
     srv.should_exit = True
+
+
+@pytest.fixture(autouse=True)
+def _no_background_jobs_left_behind():
+    """Each test ends with its background jobs finished, so no thread outlives the objects it belongs to."""
+    yield
+    try:
+        from ui.controller import wait_for_all_jobs
+    except Exception:                                   # tests that never touch the UI
+        return
+    wait_for_all_jobs()

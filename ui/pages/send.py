@@ -11,12 +11,12 @@ from PyQt6.QtWidgets import (
 
 from security_core import VaultLedger
 from ui.controller import Job
-from ui.dialogs import confirm
+from ui.dialogs import verify_fingerprint
 from ui.pages.base import Page
 from ui import motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, IconBadge, KeyValue, ListRow, Pill,
-    FitStack, ProgressPanel, Stepper, file_icon, friendly_date, human_size, label,
+    FitStack, ProgressPanel, Stepper, escape_goes_back, file_icon, friendly_date, human_size, label, on_enter,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -49,7 +49,9 @@ class SendPage(Page):
             "conflict": "Sending is turned off: this relay already has a different key under your name. "
                         "Use a different relay, or ask its administrator."})
         self.stepper = Stepper(["Choose a file", "Choose a person", "Review and send"])
+        self.stepper.step_clicked.connect(self._step_clicked)
         self.root.addWidget(self.stepper)
+        escape_goes_back(self, self._escape_back)
         self.card = Card(padding=24, spacing=14)
         self.stack = FitStack()                         # as tall as the current step, not the tallest one
         self.card.body.addWidget(self.stack)
@@ -71,6 +73,7 @@ class SendPage(Page):
         self.files = QListWidget()
         self.files.itemSelectionChanged.connect(self._file_picked)
         self.files.itemDoubleClicked.connect(lambda _i: self._next())
+        on_enter(self.files, self._next)
         l0.addWidget(self.files)
         self.files_empty = EmptyState("shield", "Nothing to send yet",
                                       "Choose a file: it is protected first, then you pick who gets it.",
@@ -106,6 +109,7 @@ class SendPage(Page):
         self.people = QListWidget()
         self.people.itemSelectionChanged.connect(self._person_picked)
         self.people.itemDoubleClicked.connect(lambda _i: self._next())
+        on_enter(self.people, self._next)
         l1.addWidget(self.people)
         self.people_empty = EmptyState("users", "No one here yet",
                                        "Press “Refresh people” to look them up. They need to have opened the app at least once.")
@@ -363,6 +367,7 @@ class SendPage(Page):
         self.step = i
         self.stack.setCurrentIndex(min(i, 2))
         self.stepper.set_current(i)
+        self.stepper.clickable = i < 3 and self._job is None
         self.back_btn.setVisible(i == 1)                   # step 3 has its own Back beside "Send securely"
         self.next_btn.setVisible(i == 1 or (i == 0 and self.files.count() > 0))   # no files: the empty state leads
         if i == 2:
@@ -378,6 +383,15 @@ class SendPage(Page):
     def _back(self) -> None:
         if self._job is None:
             self._go(max(0, self.step - 1))
+
+    def _escape_back(self) -> None:
+        if self._job is None and self.step in (1, 2):
+            self._back()
+
+    def _step_clicked(self, i: int) -> None:
+        """A finished step in the indicator was clicked: go back to it (not while working, not once sent)."""
+        if self._job is None and self.step < 3:
+            self._go(i)
 
     def _next(self) -> None:
         if self.step == 0 and self.entry_id:
@@ -419,10 +433,7 @@ class SendPage(Page):
         self.send_btn.setText("Resume sending" if self.ctl.has_pending_upload(self.entry_id, self.recipient) else "Send securely")
 
     def _verify_now(self) -> None:
-        if self.recipient and confirm(
-                self, "Confirm fingerprint",
-                f"Did {self.recipient} read you exactly this fingerprint, over a channel you trust?\n\n{self.rv_fp.raw()}",
-                ok="Yes, it matches"):
+        if self.recipient and verify_fingerprint(self, self.recipient, self.rv_fp.raw()):
             self.ctl.verify_contact(self.recipient)
             self._fill_review()
 
@@ -433,6 +444,7 @@ class SendPage(Page):
         self.error.hide()
         self.review.hide()
         self.back_btn.setEnabled(False)
+        self.stepper.clickable = False
         self.progress.start(f"Sending {entry['original_filename']} to {self.recipient}")
         try:
             job = self.ctl.make_send_job(entry, self.recipient)
@@ -452,6 +464,7 @@ class SendPage(Page):
                                "and you'll get a notification when they do.")
         motion.reveal(self.done, motion.SLOW)
         self.stepper.set_current(3)
+        self.stepper.clickable = False
         self.next_btn.hide()
         self.back_btn.hide()
         self.notify_if_away(f"Sent to {result['to']}.", "success")
@@ -459,6 +472,7 @@ class SendPage(Page):
     def _failed(self, message: str) -> None:
         self._job = None
         self.progress.finish()
+        self.stepper.clickable = True
         self.review.show()
         self.back_btn.setEnabled(True)
         self.error.set(message, "danger")
@@ -469,6 +483,7 @@ class SendPage(Page):
     def _cancelled(self) -> None:
         self._job = None
         self.progress.finish()
+        self.stepper.clickable = True
         self.review.show()
         self.back_btn.setEnabled(True)
         self.ctl.toast.emit("Sending cancelled. Nothing was delivered.", "info")

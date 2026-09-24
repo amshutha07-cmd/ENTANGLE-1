@@ -257,3 +257,93 @@ def test_dropping_a_file_on_the_send_page_protects_it_for_sending(signed_in, tmp
     win.go("home")
     win.dropEvent(Drop())
     assert routed[-1] == ("vault", str(f))                   # anywhere else: Protect, as before
+
+
+FP = "A2F901DE 2F4219ED 8D5187EE E11BD291 88E1224E 166B9D78 4A3BBF79 237B6083"
+
+
+def test_verification_checks_every_group_before_trusting():
+    from PyQt6.QtWidgets import QDialog
+    from ui.dialogs import VerifyDialog
+    d = VerifyDialog(None, "sam", FP)
+    for i in range(7):
+        assert d.group.text() == FP.split()[i]
+        d._yes()
+        assert d.result() != QDialog.DialogCode.Accepted      # not trusted until the last group matched
+    d._yes()
+    assert d.result() == QDialog.DialogCode.Accepted
+
+
+def test_a_mismatch_stops_and_warns():
+    from PyQt6.QtWidgets import QDialog
+    from ui.dialogs import VerifyDialog
+    d = VerifyDialog(None, "sam", FP)
+    d.show()
+    d._yes()
+    d._no()
+    assert d.mismatch and d.warning.isVisible() and "pretending" in d.warning._text.text()
+    assert not d.yes_btn.isVisible() and d.cancel_btn.text() == "Close"
+    d.close()
+    assert d.result() != QDialog.DialogCode.Accepted
+
+
+def test_holding_enter_confirms_nothing():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from ui.dialogs import VerifyDialog
+    d = VerifyDialog(None, "sam", FP)
+    d.show()
+    for _ in range(10):
+        QTest.keyClick(d, Qt.Key.Key_Return)
+    assert d.index == 0                                       # each group needs a deliberate "It matches"
+
+
+def test_finished_steps_are_a_way_back(signed_in):
+    from PyQt6.QtCore import QPoint, Qt
+    from PyQt6.QtTest import QTest
+    ctl, win = signed_in
+    sp = win.pages["send"]
+    win.go("send")
+    VerifyEntry = VaultLedger.add_entry("deck.pdf", "/x/d.png", "2026-09-25 09:00:00", size=10, storage={}, owner="ux_user")
+    sp._fill_files()
+    sp.entry_id = VerifyEntry["id"]
+    sp._go(1)
+    pump(0.1)
+    x_first = int(sp.stepper.width() / 3 / 2)                # middle of "Choose a file"
+    QTest.mouseClick(sp.stepper, Qt.MouseButton.LeftButton, pos=QPoint(x_first, sp.stepper.height() // 2))
+    assert sp.step == 0                                       # clicked a finished step: back there
+    x_last = int(sp.stepper.width() * 5 / 6)
+    QTest.mouseClick(sp.stepper, Qt.MouseButton.LeftButton, pos=QPoint(x_last, sp.stepper.height() // 2))
+    assert sp.step == 0                                       # a step not reached yet is not a shortcut
+    sp._go(1)
+    sp.stepper.clickable = False                              # e.g. while sending
+    QTest.mouseClick(sp.stepper, Qt.MouseButton.LeftButton, pos=QPoint(x_first, sp.stepper.height() // 2))
+    assert sp.step == 1
+
+
+def test_enter_picks_and_escape_goes_back(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    ctl, win = signed_in
+    sp = win.pages["send"]
+    win.go("send")
+    e = VaultLedger.add_entry("minutes.pdf", "/x/m.png", "2026-09-25 09:00:00", size=10, storage={}, owner="ux_user")
+    sp._fill_files()
+    sp._go(0)
+    for i in range(sp.files.count()):
+        if sp.files.item(i).data(Qt.ItemDataRole.UserRole) == e["id"]:
+            sp.files.setCurrentRow(i)
+    sp._refresh_people = lambda: None
+    sp.files.setFocus()
+    QTest.keyClick(sp.files, Qt.Key.Key_Return)
+    assert sp.step == 1                                       # Enter = "Continue" with the highlighted file
+    SecurityCore.pin_discovered_contact("sam_contact", SecurityCore.load_identity_for_user("ux_user")["public_key"], "relay")
+    sp._fill_people()                                         # with a contact, the search box is shown
+    win.activateWindow()
+    sp.search.setText("zz")
+    sp.search.setFocus()
+    pump(0.05)
+    sp._escape.activated.emit()
+    assert sp.search.text() == "" and sp.step == 1            # Esc first clears the search…
+    sp._escape.activated.emit()
+    assert sp.step == 0                                       # …then goes back a step

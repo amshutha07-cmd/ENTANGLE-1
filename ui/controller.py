@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 ProgressFn = Callable[[str, int], None]
 
 
+# Every started job stays referenced here until its thread has really finished. Qt aborts the whole process if a
+# QThread object is destroyed while its thread is still running (e.g. a controller dropped mid-lookup).
+RUNNING: set = set()
+
+
+def wait_for_all_jobs(ms: int = 20000) -> None:
+    """Cancel and wait for every job still running anywhere (used at shutdown and between tests)."""
+    for j in list(RUNNING):
+        j.cancel()
+        j.wait(ms)
+
+
 class Job(QThread):
     """Runs fn(progress, cancelled) off the UI thread. Emits exactly one of succeeded / failed / cancelled."""
 
@@ -111,6 +123,8 @@ class AppController(QObject):
                 on_progress: Optional[Callable] = None, on_cancel: Optional[Callable] = None) -> Job:
         """Wire callbacks (they run on the UI thread), keep the job alive, start it."""
         self._jobs.add(job)
+        RUNNING.add(job)
+        job.finished.connect(lambda j=job: RUNNING.discard(j))   # QThread.finished: the thread has ended
         if on_progress:
             job.progress.connect(on_progress)
         if on_success:

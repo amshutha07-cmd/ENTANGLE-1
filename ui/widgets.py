@@ -8,7 +8,9 @@ import hashlib
 import os
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtProperty, pyqtSignal
+from PyQt6.QtCore import (
+    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtProperty, pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
@@ -109,6 +111,41 @@ def add_reveal_toggle(edit) -> None:
     edit._reveal_action = act
     edit.hide_passphrase = hide_again                   # call when the screen is reused (never leave it revealed)
     paint()
+
+
+class _OnEnter(QObject):
+    def __init__(self, fn, parent):
+        super().__init__(parent)
+        self._fn = fn
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._fn()
+            return True
+        return False
+
+
+def on_enter(widget, fn) -> None:
+    """Enter/Return on `widget` (e.g. a list) runs fn, like a double-click does, without single-click activation."""
+    f = _OnEnter(fn, widget)
+    widget.installEventFilter(f)
+    widget._on_enter = f
+
+
+def escape_goes_back(page, back) -> None:
+    """Esc clears a search field that has text; otherwise it runs `back` (only while focus is inside `page`)."""
+    from PyQt6.QtGui import QKeySequence, QShortcut
+    from PyQt6.QtWidgets import QLineEdit
+
+    def esc() -> None:
+        fw = QApplication.focusWidget() or page.focusWidget()   # the page remembers its focused field
+        if isinstance(fw, QLineEdit) and fw.text():
+            fw.clear()
+            return
+        back()
+    sc = QShortcut(QKeySequence(Qt.Key.Key_Escape), page, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    sc.activated.connect(esc)
+    page._escape = sc
 
 
 def human_size(n: Optional[int]) -> str:
@@ -610,13 +647,34 @@ class Fingerprint(QFrame):
 
 
 class Stepper(QWidget):
-    """Numbered steps: done ✓, current highlighted, upcoming muted."""
+    """Numbered steps: done ✓, current highlighted, upcoming muted. Finished steps can be clicked to go back."""
+    step_clicked = pyqtSignal(int)
 
     def __init__(self, steps: list[str], parent=None):
         super().__init__(parent)
         self._steps, self._current = steps, 0
         self._shown = 0.0                                 # where the connecting line's fill has got to (animated)
+        self.clickable = True                             # the owner turns this off while going back is not allowed
         self.setMinimumHeight(38)
+        self.setMouseTracking(True)
+
+    def _step_at(self, x: float) -> int:
+        i = int(x // (self.width() / max(1, len(self._steps))))
+        return i if 0 <= i < len(self._steps) else -1
+
+    def _can_go(self, i: int) -> bool:
+        return self.clickable and 0 <= i < self._current
+
+    def mouseMoveEvent(self, e) -> None:
+        i = self._step_at(e.position().x())
+        go = self._can_go(i)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if go else Qt.CursorShape.ArrowCursor)
+        self.setToolTip(f"Back to “{self._steps[i]}”" if go else "")
+
+    def mouseReleaseEvent(self, e) -> None:
+        i = self._step_at(e.position().x())
+        if e.button() == Qt.MouseButton.LeftButton and self._can_go(i):
+            self.step_clicked.emit(i)
 
     def _get_shown(self) -> float:
         return self._shown

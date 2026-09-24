@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 
 import cloud_dispatcher
-from ui import icons, theme
+from ui import icons, motion, theme
 from ui.widgets import clear_layout, Banner, Button, IconBadge, label, add_reveal_toggle
 
 
@@ -65,6 +65,129 @@ def info(parent, title: str, text: str, kind: str = "info") -> None:
     row.addWidget(ok)
     lay.addLayout(row)
     dlg.exec()
+
+
+class VerifyDialog(QDialog):
+    """
+    Compare a key fingerprint with its owner, one group of 8 characters at a time. Reading 64 characters in one go
+    over the phone invites a skim and a "yes"; eight small, numbered checks do not. Nothing is shortened: every
+    group is compared, so the check is exactly as strong as before.
+    """
+
+    def __init__(self, parent, name: str, fingerprint: str):
+        super().__init__(parent)
+        self.name, self.groups = name, fingerprint.split()
+        self.index, self.mismatch = 0, False
+        self.setWindowTitle(f"Verify {name}'s key")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 24, 26, 20)
+        lay.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        self.badge = IconBadge("key", "primary", 44)
+        head.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout()
+        self.title = label(f"Compare {name}'s key with them", "h2")
+        self.intro = label(f"Call {name} or meet them. Ask them to open People & keys and read out THEIR OWN "
+                           "fingerprint, one group at a time. Check each group against the one shown here.", "muted")
+        col.addWidget(self.title)
+        col.addWidget(self.intro)
+        head.addLayout(col, 1)
+        lay.addLayout(head)
+
+        self.step = label("", "eyebrow", wrap=False)
+        self.step.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.step)
+        self.group = QLabel()
+        self.group.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.group.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        f = self.group.font()
+        f.setFamily(theme.mono_family())
+        f.setPixelSize(34)
+        f.setBold(True)
+        f.setLetterSpacing(f.SpacingType.AbsoluteSpacing, 3)
+        self.group.setFont(f)
+        lay.addWidget(self.group)
+        self.dots = QHBoxLayout()
+        self.dots.setSpacing(8)
+        self.dots.addStretch()
+        self._dots = []
+        for _ in self.groups:
+            d = QLabel()
+            d.setFixedSize(10, 10)
+            self._dots.append(d)
+            self.dots.addWidget(d)
+        self.dots.addStretch()
+        lay.addLayout(self.dots)
+        self.warning = Banner("", "danger")
+        self.warning.hide()
+        lay.addWidget(self.warning)
+
+        row = QHBoxLayout()
+        self.cancel_btn = Button("Cancel", "ghost")
+        self.cancel_btn.clicked.connect(self.reject)
+        self.no_btn = Button("It doesn't match", "danger", "x")
+        self.no_btn.clicked.connect(self._no)
+        self.yes_btn = Button("It matches", "primary", "check")
+        self.yes_btn.clicked.connect(self._yes)
+        # Deliberately NO default button: holding down Enter must not "confirm" eight groups nobody compared.
+        for b in (self.cancel_btn, self.no_btn, self.yes_btn):
+            b.setAutoDefault(False)
+            b.setDefault(False)
+        row.addWidget(self.cancel_btn)
+        row.addStretch()
+        row.addWidget(self.no_btn)
+        row.addWidget(self.yes_btn)
+        lay.addLayout(row)
+        self._show()
+
+    def _show(self) -> None:
+        n = len(self.groups)
+        self.step.setText(f"GROUP {self.index + 1} OF {n}")
+        self.group.setText(self.groups[self.index] if self.groups else "")
+        for i, d in enumerate(self._dots):
+            col = theme.color("success") if i < self.index else theme.color("primary") if i == self.index \
+                else theme.color("border_strong")
+            d.setStyleSheet(f"background: {col}; border-radius: 5px;")
+
+    def _yes(self) -> None:
+        if self.index + 1 < len(self.groups):
+            self.index += 1
+            self._show()
+            motion.fade_in(self.group, motion.FAST)       # a visible change, so nobody misses that it moved on
+        else:
+            self.accept()                                  # every group matched
+
+    def _no(self) -> None:
+        self.mismatch = True
+        self.badge.set("alert", "danger")
+        self.title.setText("Stop: the keys don't match")
+        self.intro.setText("")
+        self.intro.hide()
+        self.step.hide()
+        self.group.hide()
+        for d in self._dots:
+            d.hide()
+        self.warning.set(f"The key you have for {self.name} is not the key {self.name} has. Someone may be pretending "
+                         f"to be them. Don't send them anything sensitive or open files from them until you have "
+                         f"sorted this out in person.", "danger")
+        self.warning.show()
+        self.no_btn.hide()
+        self.yes_btn.hide()
+        self.cancel_btn.setText("Close")
+        self.cancel_btn.set_variant("secondary")
+        self.adjustSize()
+
+
+def verify_fingerprint(parent, name: str, fingerprint: str) -> bool:
+    """True only if the person confirmed every group. A mismatch shows a warning and returns False."""
+    if len(fingerprint.split()) < 2:                      # not in groups: fall back to a single comparison
+        return confirm(parent, "Confirm fingerprint",
+                       f"Did {name} read you exactly this fingerprint, over a channel you trust?\n\n{fingerprint}",
+                       ok="Yes, it matches")
+    return VerifyDialog(parent, name, fingerprint).exec() == QDialog.DialogCode.Accepted
 
 
 HELP = {

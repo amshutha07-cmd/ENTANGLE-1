@@ -66,6 +66,9 @@ def auto_confirm(monkeypatch):
 
     for mod in (ui.dialogs, a, c, i, s, st, v):
         monkeypatch.setattr(mod, "confirm", fake, raising=False)
+        monkeypatch.setattr(mod, "verify_fingerprint",
+                            lambda parent, name, fp: state["asked"].append("verify " + name) or state["answer"],
+                            raising=False)
     for mod in (c,):
         monkeypatch.setattr(mod, "info", lambda *a, **k: None, raising=False)
     return state
@@ -326,7 +329,7 @@ def test_contacts_screen_verifies_and_removes(env, auto_confirm):
     assert cp.d_pill.text() == "Not verified" and cp.verify_btn.isVisibleTo(cp)
     cp._verify()
     assert cp.d_pill.text() == "Verified" and not cp.verify_btn.isVisibleTo(cp)
-    assert "Confirm fingerprint" in auto_confirm["asked"]
+    assert "verify ui_gus" in auto_confirm["asked"]
     cp._remove()
     assert "ui_gus" not in [cp.list.item(i).data(0x100) for i in range(cp.list.count()) if cp.list.item(i).data(0x100)]
     a.logout()

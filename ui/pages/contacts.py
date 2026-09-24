@@ -6,7 +6,7 @@ from typing import Optional
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout
 
-from ui.dialogs import confirm, info
+from ui.dialogs import confirm, info, verify_fingerprint
 from ui.pages.base import Page
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, ListRow, Pill, label,
@@ -183,10 +183,7 @@ class ContactsPage(Page):
 
     # ── actions ──────────────────────────────────────────────────────────────
     def _verify(self) -> None:
-        if self._selected and confirm(
-                self, "Confirm fingerprint",
-                f"Did {self._selected} read you EXACTLY this fingerprint, over a channel you trust?\n\n{self.d_fp.raw()}",
-                ok="Yes, it matches"):
+        if self._selected and verify_fingerprint(self, self._selected, self.d_fp.raw()):
             self.ctl.verify_contact(self._selected)
 
     def _remove(self) -> None:

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 from relay_client import RelayError
 from ui.controller import Job
-from ui.dialogs import confirm
+from ui.dialogs import confirm, verify_fingerprint
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
 from ui import motion
@@ -246,9 +246,7 @@ class InboxPage(Page):
 
     def _verify(self) -> None:
         it = self._current
-        if it and confirm(self, "Confirm fingerprint",
-                          f"Did {it['from']} read you exactly this fingerprint, over a channel you trust?\n\n{it.get('sender_fingerprint', '')}",
-                          ok="Yes, it matches"):
+        if it and verify_fingerprint(self, it["from"], it.get("sender_fingerprint", "")):
             self.ctl.verify_contact(it["from"])
             self._picked()
 
