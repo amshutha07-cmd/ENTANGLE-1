@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from PyQt6.QtCore import QEvent, QObject, QTimer
@@ -47,6 +48,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.ctl = ctl or AppController()
         self.setWindowTitle("A.N.Sx Vault")
+        self.setAcceptDrops(True)                      # drop a file anywhere to protect it
         self.setMinimumSize(980, 680)
         self.resize(1200, 800)
 
@@ -212,6 +214,29 @@ class MainWindow(QMainWindow):
             page.show_tab(tab)
         elif key == "inbox":
             page.show_tab("received")
+
+    # ── drop a file anywhere to protect it ───────────────────────────────────
+    def _dropped_file(self, mime) -> Optional[str]:
+        if self.root_stack.currentIndex() != 1 or not mime.hasUrls():
+            return None
+        files = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+        return files[0] if len(files) == 1 and os.path.isfile(files[0]) else None
+
+    def dragEnterEvent(self, e) -> None:
+        if self._dropped_file(e.mimeData()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e) -> None:
+        path = self._dropped_file(e.mimeData())
+        if not path:
+            return
+        e.acceptProposedAction()
+        vault = self.pages["vault"]
+        if vault._job is not None:
+            self.toasts_show("Already protecting a file. Drop the next one when it has finished.", "warning")
+            return
+        self.go("vault")
+        vault.protect_file(path)
 
     def _set_waiting(self, n: int) -> None:
         """Inbox count on the sidebar badge and in the window title (seen in the taskbar / window list)."""

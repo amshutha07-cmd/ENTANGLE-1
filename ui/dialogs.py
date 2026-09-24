@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 
 import cloud_dispatcher
 from ui import icons, theme
-from ui.widgets import clear_layout, Banner, Button, IconBadge, label
+from ui.widgets import clear_layout, Banner, Button, IconBadge, label, add_reveal_toggle
 
 
 def confirm(parent, title: str, text: str, ok: str = "Confirm", danger: bool = False, cancel: str = "Cancel") -> bool:
@@ -108,6 +108,7 @@ class StorageDialog(QDialog):
         self.access = QLineEdit()
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.secret)
         self.account = QLineEdit()
         self.account.setPlaceholderText("32 characters")
         self.region = QLineEdit()

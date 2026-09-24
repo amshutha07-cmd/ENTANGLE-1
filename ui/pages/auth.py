@@ -14,6 +14,7 @@ from ui import motion, theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
+    add_reveal_toggle,
     FitStack,
     Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish,
 )
@@ -105,6 +106,7 @@ class LoginView(_Center):
         pl.addLayout(top)
         self.pass_edit = QLineEdit()
         self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pass_edit)
         self.pass_edit.setPlaceholderText("Your passphrase")
         self.pass_edit.returnPressed.connect(self._unlock)
         pl.addWidget(self.pass_edit)
@@ -137,6 +139,7 @@ class LoginView(_Center):
         self.error.setVisible(bool(text))
 
     def refresh(self) -> None:
+        self.pass_edit.hide_passphrase()
         self.people.clear()
         for name in self.ctl.operators():
             mode = self.ctl.auth_mode(name)
@@ -196,6 +199,7 @@ class LoginView(_Center):
         self._job = None
         self._busy(False)
         self.pass_edit.clear()
+        self.pass_edit.hide_passphrase()
         self.ctl.begin_session(name)
 
     def _fail(self, message: str) -> None:
@@ -295,9 +299,11 @@ class CreateView(_Center):
         pb.setSpacing(8)
         self.pw1 = QLineEdit()
         self.pw1.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pw1)
         self.pw1.setPlaceholderText("Passphrase (at least 12 characters, a short sentence works well)")
         self.pw2 = QLineEdit()
         self.pw2.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pw2)
         self.pw2.setPlaceholderText("Type it again")
         self.pw_strength = Pill("", "neutral")
         self.pw_strength.hide()
@@ -430,6 +436,8 @@ class CreateView(_Center):
 
     # navigation
     def start(self, first_run: bool) -> None:
+        self.pw1.hide_passphrase()
+        self.pw2.hide_passphrase()
         self.name_edit.clear()
         self.pw1.clear()
         self.pw2.clear()

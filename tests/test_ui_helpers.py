@@ -155,3 +155,66 @@ def test_status_pills_and_new_file_toast_lead_somewhere():
     toast = win.toasts._toasts()[-1]
     QTest.mouseClick(toast, Qt.MouseButton.LeftButton)
     assert win.content.currentWidget() is win.pages["inbox"]
+
+
+def test_passphrase_fields_can_be_revealed():
+    from PyQt6.QtWidgets import QLineEdit
+    from ui.widgets import add_reveal_toggle
+    e = QLineEdit()
+    e.setEchoMode(QLineEdit.EchoMode.Password)
+    add_reveal_toggle(e)
+    e._reveal_action.trigger()
+    assert e.echoMode() == QLineEdit.EchoMode.Normal and e._reveal_action.toolTip() == "Hide passphrase"
+    e._reveal_action.trigger()
+    assert e.echoMode() == QLineEdit.EchoMode.Password and e._reveal_action.toolTip() == "Show passphrase"
+
+
+def test_dropping_a_file_anywhere_protects_it(tmp_path):
+    from PyQt6.QtCore import QMimeData, QUrl
+    from ui.controller import AppController
+    from ui.main_window import MainWindow
+    f = tmp_path / "scan.pdf"
+    f.write_bytes(b"x" * 100)
+    win = MainWindow(AppController())
+    win.root_stack.setCurrentIndex(1)
+    started = []
+    win.pages["vault"].protect_file = started.append
+
+    class Drop:
+        def __init__(self, paths):
+            self.m = QMimeData()
+            self.m.setUrls([QUrl.fromLocalFile(str(p)) for p in paths])
+            self.accepted = False
+
+        def mimeData(self):
+            return self.m
+
+        def acceptProposedAction(self):
+            self.accepted = True
+
+    d = Drop([f])
+    win.dragEnterEvent(d)
+    assert d.accepted
+    win.dropEvent(d)
+    assert started == [str(f)] and win.content.currentWidget() is win.pages["vault"]
+    two = Drop([f, f])                                        # one file at a time
+    win.dragEnterEvent(two)
+    assert not two.accepted
+    folder = Drop([tmp_path])                                 # a folder is not a file
+    win.dragEnterEvent(folder)
+    assert not folder.accepted
+    win.root_stack.setCurrentIndex(0)                         # signed out: nothing to protect with
+    locked = Drop([f])
+    win.dragEnterEvent(locked)
+    assert not locked.accepted
+
+
+def test_a_revealed_passphrase_is_hidden_again_for_the_next_person():
+    from PyQt6.QtWidgets import QLineEdit
+    from ui.controller import AppController
+    from ui.pages.auth import LoginView
+    lv = LoginView(AppController(), lambda: None)
+    lv.pass_edit._reveal_action.trigger()
+    assert lv.pass_edit.echoMode() == QLineEdit.EchoMode.Normal
+    lv.refresh()                                             # the sign-in screen is shown again (e.g. after locking)
+    assert lv.pass_edit.echoMode() == QLineEdit.EchoMode.Password

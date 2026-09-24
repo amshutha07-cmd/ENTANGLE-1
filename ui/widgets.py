@@ -86,6 +86,31 @@ def friendly_date(stamp: str) -> str:
     return f"{when:%b} {when.day}, {when.year}"
 
 
+def add_reveal_toggle(edit) -> None:
+    """An eye button inside a password field: show what you typed, hide it again."""
+    from PyQt6.QtGui import QAction
+    from PyQt6.QtWidgets import QLineEdit
+    act = QAction(edit)
+
+    def paint() -> None:
+        hidden = edit.echoMode() == QLineEdit.EchoMode.Password
+        act.setIcon(icons.icon("eye" if hidden else "eye_off", theme.color("text_muted"), 18))
+        act.setToolTip("Show passphrase" if hidden else "Hide passphrase")
+
+    def toggle() -> None:
+        hidden = edit.echoMode() == QLineEdit.EchoMode.Password
+        edit.setEchoMode(QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password)
+        paint()
+    def hide_again() -> None:
+        edit.setEchoMode(QLineEdit.EchoMode.Password)
+        paint()
+    act.triggered.connect(toggle)
+    edit.addAction(act, QLineEdit.ActionPosition.TrailingPosition)
+    edit._reveal_action = act
+    edit.hide_passphrase = hide_again                   # call when the screen is reused (never leave it revealed)
+    paint()
+
+
 def human_size(n: Optional[int]) -> str:
     if n is None:
         return "—"
