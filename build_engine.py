@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-build_engine.py — builds the native shard engine for the CURRENT OS.
+build_engine.py â€” builds the native shard engine for the CURRENT OS.
 
   Linux    libshatter.so       g++ / clang++    + OpenSSL 3 and zlib dev packages
   macOS    libshatter.dylib    clang++          + OpenSSL 3 and zlib (e.g. Homebrew)
@@ -9,6 +9,9 @@ build_engine.py — builds the native shard engine for the CURRENT OS.
 OpenSSL/zlib are located, in order, via:  $OPENSSL_DIR (contains include/ and lib/),
 pkg-config, then the compiler's default search paths.
 Override the compiler with $CXX.   Usage:  python build_engine.py
+
+On Windows the DLLs that shatter.dll needs (OpenSSL, zlib) are copied next to it, because Python does not search
+PATH for them (see pe_imports.py). The MinGW C++ runtime is linked in statically, so it needs no extra files.
 """
 from __future__ import annotations
 
@@ -58,6 +61,8 @@ def build() -> str:
         cmd = [cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-shared", SRC, "-o", out]
         if not sys.platform.startswith("win"):
             cmd.insert(3, "-fPIC")
+        else:
+            cmd += ["-static-libgcc", "-static-libstdc++"]      # no libstdc++-6.dll / libgcc_s_seh-1.dll to ship
         if ossl:
             cmd += [f"-I{os.path.join(ossl, 'include')}", f"-L{os.path.join(ossl, 'lib')}"]
         cmd += _pkg_config("--cflags") + _pkg_config("--libs-only-L")
@@ -72,31 +77,44 @@ def build() -> str:
 
     print(" ".join(cmd))
     subprocess.run(cmd, check=True, cwd=ROOT)
+    if sys.platform.startswith("win"):
+        copy_windows_dependencies(out, cxx, ossl)
     return out
+
+
+def dependency_folders(cxx: str, ossl: str = "") -> list[str]:
+    """Where a Windows build's DLLs can be: the compiler's own bin (MSYS2), $OPENSSL_DIR/bin, then PATH."""
+    folders = []
+    exe = shutil.which(cxx)
+    if exe:
+        folders.append(os.path.dirname(exe))
+    if ossl:
+        folders.append(os.path.join(ossl, "bin"))
+    folders += [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    return list(dict.fromkeys(folders))
+
+
+def copy_windows_dependencies(dll: str, cxx: str, ossl: str = "", system_dir: str | None = None) -> list[str]:
+    """Copy every non-Windows DLL that `dll` needs into its folder. Returns the names copied; exits if one is missing."""
+    import pe_imports
+    found, missing = pe_imports.non_system_dependencies(dll, dependency_folders(cxx, ossl), system_dir)
+    if missing:
+        sys.exit(f"Built {os.path.basename(dll)}, but it needs {', '.join(missing)}, which could not be found in the "
+                 "compiler's folder or on PATH. With MSYS2, add its bin folder (e.g. C:\\msys64\\ucrt64\\bin) to PATH "
+                 "and run this again.")
+    dest = os.path.dirname(os.path.abspath(dll))
+    for name, src in found.items():
+        if os.path.normcase(os.path.dirname(os.path.abspath(src))) != os.path.normcase(dest):
+            shutil.copy2(src, os.path.join(dest, name))
+            print(f"copied {name}  (from {os.path.dirname(src)})")
+    return sorted(found)
 
 
 if __name__ == "__main__":
     path = build()
-
-    import ctypes
-
-    if sys.platform.startswith("win"):
-        dll_dirs = []
-
-        # Allow the user to specify their MSYS2 MinGW64 bin directory.
-        if os.environ.get("MSYS2_MINGW64"):
-            dll_dirs.append(os.environ["MSYS2_MINGW64"])
-
-        # Common MSYS2 installation locations.
-        dll_dirs.extend([
-            r"C:\msys64\mingw64\bin",
-            r"C:\msys64\ucrt64\bin",
-            r"C:\msys64\clang64\bin",
-        ])
-
-        for dll_dir in dll_dirs:
-            if os.path.isdir(dll_dir):
-                os.add_dll_directory(dll_dir)
-                break
-
-    print(f"built {os.path.basename(path)} (engine v{ctypes.CDLL(path).ansx_engine_version()})")
+    import engine
+    try:
+        version = engine.load_library(path).ansx_engine_version()
+    except engine.EngineError as exc:
+        sys.exit(f"Built {os.path.basename(path)}, but it does not load: {exc}")
+    print(f"built {os.path.basename(path)} (engine v{version})")

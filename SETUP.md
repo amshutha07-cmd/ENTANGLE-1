@@ -36,6 +36,8 @@ Parts B–D make it real (cloud storage, a public relay, two users).
    pip install -r requirements-dev.txt
    ```
 3. **Build the native engine** — `python build_engine.py`. Expect `built libshatter.<ext> (engine v2)`.
+   On Windows it also copies the OpenSSL and zlib DLLs next to `shatter.dll` (Python does not look for them on PATH).
+   If the app says *"Could not find module …shatter.dll (or one of its dependencies)"*, run `python build_engine.py` again.
    If it says OpenSSL not found: set `OPENSSL_DIR` to the folder containing `include/` and `lib/` (macOS Homebrew: `export OPENSSL_DIR=$(brew --prefix openssl@3)`).
 4. **Run the tests** — `python -m pytest tests -q`. Everything should pass (≈30 s). If not, stop and fix that first.
 5. **Start a local relay** in a second terminal: `uvicorn relay.server:create_app --factory --port 8000`.
@@ -59,6 +61,17 @@ python3 run_relay.py --tunnel       # keep this window open
 internet, saves it as this computer's setting, and prints it. Everyone else pastes that address into **Settings → Connection**.
 (The address changes each time you restart it. If the app on the same computer can't reach it for a minute or two, your
 computer's DNS hasn't learned the new name yet; the launcher tells you how to flush it.)
+
+**Want an address that never changes?** Use Tailscale Funnel instead of Cloudflare:
+
+```bash
+brew install --cask tailscale-app   # or tailscale.com/download; open it and sign in (version 1.52 or newer)
+python3 run_relay.py --tailscale    # keep this window open
+```
+
+The address is `https://<this-computer>.<your-tailnet>.ts.net` and stays the same across restarts, so people enter it
+once. Only the computer running the relay needs Tailscale; everyone else just uses the address. The first time, Funnel may
+need to be allowed for your tailnet: the launcher prints Tailscale's link to switch it on.
 
 Then in another terminal: `python3 main.py`. To check that an installation is healthy at any time:
 `python3 main.py --self-test` (or `ANSxVault --self-test` for the packaged app).

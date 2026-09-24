@@ -343,12 +343,8 @@ class SecurityCore:
             return False
 
         if data.get("version") == _IDENTITY_VERSION:
-            try:
-                anchor = cls._derive_anchor(nfc_seed, bytes.fromhex(data["kdf"]["salt"]))
-            except Exception as e:
-                logger.error("[Security] Anchor derivation failed: %s", e)
-                return False
-            if not hmac.compare_digest(cls._subkey(anchor, b"ANSX verify").hex(), data["verifier"]):
+            anchor = cls._matching_anchor(data, nfc_seed)
+            if anchor is None:
                 return False
             try:
                 secret_blob = cls._unwrap(cls._subkey(anchor, b"ANSX wrap"), operator_name, data["vault_id"], data["wrapped"])
@@ -360,6 +356,41 @@ class SecurityCore:
             return True
 
         return cls._migrate_legacy(operator_name, data, nfc_seed)
+
+    @classmethod
+    def _matching_anchor(cls, data: dict, nfc_seed: str) -> Optional[bytes]:
+        """The v2 anchor if `nfc_seed` is this identity's secret, else None. Unlocks nothing."""
+        try:
+            anchor = cls._derive_anchor(nfc_seed, bytes.fromhex(data["kdf"]["salt"]))
+        except Exception as e:
+            logger.error("[Security] Anchor derivation failed: %s", e)
+            return None
+        if not hmac.compare_digest(cls._subkey(anchor, b"ANSX verify").hex(), data.get("verifier", "")):
+            return None
+        return anchor
+
+    @classmethod
+    def identities_unlocked_by(cls, nfc_seed: str) -> list[str]:
+        """
+        Card identities on this device that `nfc_seed` opens. Registration checks this before writing a new
+        secret to a card, because overwriting the card destroys the only key to those identities.
+        """
+        if not nfc_seed:
+            return []
+        found, geo = [], None
+        for name in sorted(cls.list_registered_users()):
+            data = cls._read_identity_file(name)
+            if not data or data.get("auth", "nfc") != "nfc":
+                continue
+            if data.get("version") == _IDENTITY_VERSION:
+                if cls._matching_anchor(data, nfc_seed) is not None:
+                    found.append(name)
+            elif data.get("hardware_anchor"):
+                geo = geo or cls.get_geolocation()           # looked up once, and only if a legacy identity exists
+                if any(hmac.compare_digest(cls._legacy_anchor(nfc_seed, g), data["hardware_anchor"])
+                       for g in dict.fromkeys((geo, "0.0,0.0"))):
+                    found.append(name)
+        return found
 
     @classmethod
     def _migrate_legacy(cls, operator_name: str, data: dict, nfc_seed: str) -> bool:

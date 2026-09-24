@@ -60,11 +60,47 @@ class EngineError(RuntimeError):
         super().__init__(message or ERRORS.get(code, f"Engine error {code}"))
 
 
-def _load():
+_dll_dirs: list = []                                    # keep the add_dll_directory handles alive
+
+
+def _windows_dll_help(path: str) -> str:
+    """
+    Python does not search PATH for the DLLs shatter.dll needs. Allow the PATH folders that hold them (an older build
+    whose OpenSSL/zlib were not copied next to it), and say exactly which files are missing if some are nowhere.
+    """
+    import pe_imports
+    here = os.path.dirname(path)
+    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
     try:
-        lib = ctypes.CDLL(_LIB_PATH)
+        found, missing = pe_imports.non_system_dependencies(path, [here] + path_dirs)
+    except (OSError, ValueError):
+        return ""
+    for folder in {os.path.dirname(p) for p in found.values()} - {here}:
+        try:
+            _dll_dirs.append(os.add_dll_directory(folder))
+        except (OSError, AttributeError):
+            pass
+    if missing:
+        return (f"{os.path.basename(path)} needs {', '.join(missing)}, which is not next to it or on PATH. "
+                "Run: python build_engine.py (it copies these files next to shatter.dll)")
+    return ""
+
+
+def load_library(path: str = _LIB_PATH):
+    """ctypes handle for the engine at `path`, or EngineError with a message that says how to fix it."""
+    help_text = _windows_dll_help(path) if sys.platform.startswith("win") and os.path.exists(path) else ""
+    try:
+        return ctypes.CDLL(path)
+    except OSError as exc:
+        raise EngineError(-99, f"Native shatter engine unavailable ({exc}). "
+                               f"{help_text or 'Run: python build_engine.py'}") from exc
+
+
+def _load():
+    lib = load_library()
+    try:
         version = lib.ansx_engine_version()
-    except (OSError, AttributeError) as exc:
+    except AttributeError as exc:
         raise EngineError(-99, f"Native shatter engine unavailable ({exc}). Run: python build_engine.py") from exc
     if version != EXPECTED_VERSION:
         raise EngineError(-99, f"libshatter is v{version}, expected v{EXPECTED_VERSION}. Run: python build_engine.py")

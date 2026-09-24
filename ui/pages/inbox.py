@@ -262,7 +262,8 @@ class InboxPage(Page):
         self.progress.finish()
         self.ctl.after_receive(info)
         self._last_path = info["path"]
-        self.result.set(f"Saved “{os.path.basename(info['path'])}” from {info['from']} to your Downloads folder.", "success")
+        note, kind = self.ctl.signature_note(info)
+        self.result.set(f"Saved “{os.path.basename(info['path'])}” from {info['from']} to your Downloads folder. {note}", kind)
         self.result.show()
         self.ctl.toast.emit(f"Received {os.path.basename(info['path'])}.", "success")
         self._picked()
@@ -309,7 +310,7 @@ class InboxPage(Page):
         self.progress.start("Opening the package")
         job = self.ctl.make_open_package_job(path)
         self._job = job
-        self.ctl.run_job(job, on_success=lambda info: self._received({**info, "from": "a package file"}),
+        self.ctl.run_job(job, on_success=lambda info: self._received({**info, "from": info.get("signer") or "a package file"}),
                          on_fail=self._failed, on_cancel=self._cancelled,
                          on_progress=lambda text, pct: self.progress.update_progress(text, pct))
 
