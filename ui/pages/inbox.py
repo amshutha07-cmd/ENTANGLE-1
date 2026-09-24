@@ -23,7 +23,7 @@ from ui.widgets import (
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
-              "unknown": ("New sender", "neutral"), "changed": ("Key changed", "danger")}
+              "unknown": ("New sender", "warning"), "changed": ("Key changed", "danger")}
 SENT_PILL = {"uploading": ("Uploading", "info"), "ready": ("Waiting for pickup", "warning"),
              "delivered": ("Delivered", "success"), "rejected": ("Declined", "danger"),
              "expired": ("Expired", "neutral"), "cancelled": ("Cancelled", "neutral")}

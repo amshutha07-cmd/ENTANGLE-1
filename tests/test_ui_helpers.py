@@ -112,3 +112,46 @@ def test_a_finished_job_is_announced_only_when_you_are_elsewhere():
     app.processEvents()
     page.notify_if_away("notes.txt is protected.", "success")          # on screen: the page already says so
     assert seen == ["report.pdf is protected."]
+
+
+def test_keyboard_users_can_reach_and_use_everything():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from ui.widgets import Button, ClickableCard
+    b = Button("Send", "primary")
+    assert b.focusPolicy() == Qt.FocusPolicy.TabFocus       # a ring when tabbing, none after a mouse click
+    tile = ClickableCard()
+    tile.show()
+    hits = []
+    tile.clicked.connect(lambda: hits.append(1))
+    for key in (Qt.Key.Key_Return, Qt.Key.Key_Space, Qt.Key.Key_A):
+        QTest.keyClick(tile, key)
+    assert hits == [1, 1] and tile.focusPolicy() == Qt.FocusPolicy.TabFocus
+
+
+def test_window_title_shows_what_is_waiting():
+    from ui.controller import AppController
+    from ui.main_window import MainWindow
+    win = MainWindow(AppController())
+    win._set_waiting(2)
+    assert win.windowTitle() == "A.N.Sx Vault (2 waiting)" and win.nav["inbox"].badge() == 2
+    win._set_waiting(0)
+    assert win.windowTitle() == "A.N.Sx Vault"
+
+
+def test_status_pills_and_new_file_toast_lead_somewhere():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from ui.controller import AppController
+    from ui.main_window import MainWindow
+    win = MainWindow(AppController())
+    win.resize(1200, 800)
+    win.show()
+    win.root_stack.setCurrentIndex(1)                        # signed-in shell
+    QTest.mouseClick(win.relay_pill, Qt.MouseButton.LeftButton)
+    assert win.content.currentWidget() is win.pages["settings"]
+    win.go("home")
+    win._new_transfers([{"from": "sam", "id": "t1"}])
+    toast = win.toasts._toasts()[-1]
+    QTest.mouseClick(toast, Qt.MouseButton.LeftButton)
+    assert win.content.currentWidget() is win.pages["inbox"]

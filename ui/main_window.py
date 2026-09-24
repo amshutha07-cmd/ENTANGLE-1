@@ -20,7 +20,7 @@ from ui.pages.inbox import InboxPage
 from ui.pages.send import SendPage
 from ui.pages.settings import SettingsPage
 from ui.pages.vault import VaultPage
-from ui.widgets import Avatar, Banner, Button, IconBadge, NavButton, Pill, ToastHost, label
+from ui.widgets import Avatar, Banner, Button, ClickablePill, IconBadge, NavButton, Pill, ToastHost, label
 
 logger = logging.getLogger(__name__)
 APP_VERSION = "1.0"
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
 
         if self.ctl.operator:                       # attached to a session that is already running: adopt its state
             self._session_started(self.ctl.operator)
-            self.nav["inbox"].set_badge(len(self.ctl.inbox))
+            self._set_waiting(len(self.ctl.inbox))
             self._relay_state(self.ctl.relay_state, self.ctl.relay_message)
         else:
             self.show_auth()
@@ -156,8 +156,10 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(16, 0, 16, 0)
         lay.setSpacing(10)
-        self.relay_pill = Pill("Not connected", "neutral")
-        self.storage_pill = Pill("", "neutral")
+        self.relay_pill = ClickablePill("Not connected", "neutral")
+        self.storage_pill = ClickablePill("", "neutral")
+        for pill in (self.relay_pill, self.storage_pill):          # a status you can see is a status you can fix
+            pill.clicked.connect(lambda: self.root_stack.currentIndex() == 1 and self.go("settings"))
         self.engine_banner_pill = Pill("", "danger")
         self.engine_banner_pill.hide()
         lay.addWidget(self.relay_pill)
@@ -189,7 +191,7 @@ class MainWindow(QMainWindow):
         ctl.session_ended.connect(self._session_ended)
         ctl.toast.connect(self.toasts_show)
         ctl.new_transfers.connect(self._new_transfers)
-        ctl.inbox_changed.connect(lambda items: self.nav["inbox"].set_badge(len(items)))
+        ctl.inbox_changed.connect(lambda items: self._set_waiting(len(items)))
         ctl.relay_state_changed.connect(self._relay_state)
         ctl.vault_changed.connect(self._storage_pill)
 
@@ -210,6 +212,11 @@ class MainWindow(QMainWindow):
             page.show_tab(tab)
         elif key == "inbox":
             page.show_tab("received")
+
+    def _set_waiting(self, n: int) -> None:
+        """Inbox count on the sidebar badge and in the window title (seen in the taskbar / window list)."""
+        self.nav["inbox"].set_badge(n)
+        self.setWindowTitle(f"A.N.Sx Vault ({n} waiting)" if n else "A.N.Sx Vault")
 
     def _shortcut(self, key: str) -> None:
         if self.root_stack.currentIndex() == 1:
@@ -245,7 +252,7 @@ class MainWindow(QMainWindow):
         self._idle.stop()
         for page in self.pages.values():
             page.on_session_ended()
-        self.nav["inbox"].set_badge(0)
+        self._set_waiting(0)
         self.show_auth()
 
     def _lock(self) -> None:
@@ -275,11 +282,14 @@ class MainWindow(QMainWindow):
                       "offline": ("Offline", "warning"), "conflict": ("Name conflict", "danger"),
                       "idle": ("Not connected", "neutral")}.get(state, (state, "neutral"))
         self.relay_pill.set(f"● {text}" if state != "idle" else text, kind)
-        self.relay_pill.setToolTip(message)
+        self.relay_pill.setToolTip(f"{message}\nClick to open connection settings." if message
+                                   else "Click to open connection settings.")
+        motion.breathe(self.relay_pill, state == "connecting")
 
     def _storage_pill(self) -> None:
         n = len(self.ctl.storage_targets())
         self.storage_pill.set(f"Cloud storage: {n}" if n else "Storage: inside package", "success" if n else "neutral")
+        self.storage_pill.setToolTip("Click to manage cloud storage.")
 
     def _engine_check(self) -> None:
         ok = engine.available()
@@ -289,7 +299,8 @@ class MainWindow(QMainWindow):
 
     def _new_transfers(self, items: list) -> None:
         names = ", ".join(sorted({i["from"] for i in items}))
-        self.toasts_show(f"New file from {names}. Open your inbox to review it.", "info")
+        self.toasts.show_toast(f"New file from {names}. Click here to open your inbox.", "info", 7000,
+                               on_click=lambda: self.root_stack.currentIndex() == 1 and self.go("inbox"))
         QApplication.alert(self)
         if self._tray and not self.isActiveWindow():
             self._tray.showMessage("A.N.Sx Vault", f"New file from {names}", QSystemTrayIcon.MessageIcon.Information, 6000)

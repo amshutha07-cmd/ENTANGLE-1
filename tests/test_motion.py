@@ -149,3 +149,15 @@ def test_settings_switch_saves_and_applies_reduced_motion():
     assert pref("reduce_motion") is True and motion.reduced()
     page.motion_combo.setCurrentIndex(0)                     # "On"
     assert pref("reduce_motion") is False and not motion.reduced()
+
+
+def test_connecting_breathes_and_stops_cleanly():
+    from ui.widgets import Pill
+    p = Pill("● Connecting…", "info")
+    p.show()
+    motion.breathe(p, True)
+    seen = watch(lambda: round(p.graphicsEffect().opacity(), 2) if p.graphicsEffect() else None,
+                 lambda: False, seconds=0.9)
+    assert any(o is not None and o < 0.9 for o in seen)      # it really pulses
+    motion.breathe(p, False)                                  # online: back to normal, no effect left behind
+    assert p.graphicsEffect() is None and getattr(p, "_ansx_breathe_anim", None) is None

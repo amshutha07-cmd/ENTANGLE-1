@@ -106,6 +106,35 @@ def reveal(w: QWidget, ms: int = NORMAL) -> None:
     fade_in(w, ms)
 
 
+def breathe(w: QWidget, on: bool, ms: int = 1400) -> None:
+    """A slow, looping fade for something in progress (e.g. "Connecting…"); off removes it and restores full opacity."""
+    anim = getattr(w, "_ansx_breathe_anim", None)
+    if not on or reduced():
+        if anim is not None:
+            anim.stop()
+            w._ansx_breathe_anim = None
+            try:
+                if w.graphicsEffect() is not None and getattr(w.graphicsEffect(), "_ansx_breathe", False):
+                    w.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+        return
+    if anim is not None:
+        return                                            # already breathing
+    eff = QGraphicsOpacityEffect(w)
+    eff._ansx_breathe = True
+    w.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b"opacity", w)
+    anim.setDuration(ms)
+    anim.setStartValue(1.0)
+    anim.setKeyValueAt(0.5, 0.45)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+    anim.setLoopCount(-1)
+    w._ansx_breathe_anim = anim
+    anim.start()
+
+
 # ── movement ────────────────────────────────────────────────────────────────────────────────────
 def shake(w: QWidget, distance: int = 9, ms: int = SLOW) -> None:
     """

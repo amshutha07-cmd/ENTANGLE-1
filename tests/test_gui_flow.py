@@ -222,7 +222,9 @@ def test_full_user_journey_across_the_real_screens(env, auto_confirm, tmp_path, 
     bob.go("inbox")
     bi = bob.pages["inbox"]
     assert pump(lambda: bi.inbox_list.count() == 1 and bi._current is not None, 10)
-    assert bi.d_from.text() == "ui_carla" and "Not verified" in bi.d_pill.text()
+    # carla's key reaches bob's contacts through LAN discovery, which may or may not have happened yet: either way the
+    # sender is flagged as not verified ("New sender" before discovery, "Not verified" after) with a warning banner.
+    assert bi.d_from.text() == "ui_carla" and bi.d_pill.text() in ("Not verified", "New sender")
     assert bi.d_banner.property("kind") == "warning"
 
     # ── bob accepts ──

@@ -223,6 +223,7 @@ class Button(QPushButton):
         self.setProperty("variant", variant)
         self.setProperty("size", size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)     # focus ring for keyboard users, not after every click
         self.setIconSize(QSize(18, 18))
         self.refresh_icon()
 
@@ -252,6 +253,7 @@ class NavButton(QPushButton):
         self._badge = 0
         self._text = text.replace("&", "&&")
         self.setCheckable(True)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setProperty("nav", "true")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setIconSize(QSize(20, 20))
@@ -356,6 +358,19 @@ class Avatar(QWidget):
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, letters.upper())
 
 
+class ClickablePill(Pill):
+    """A status pill that opens the place where that status can be changed."""
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str = "", kind: str = "neutral", parent=None):
+        super().__init__(text, kind, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
+            self.clicked.emit()
+
+
 class IconBadge(QLabel):
     """Rounded square with an icon — used for tiles and empty states."""
 
@@ -395,10 +410,17 @@ class ClickableCard(Card):
         super().__init__(parent, padding=padding, spacing=spacing)
         self.setProperty("clickable", "true")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)     # reachable with Tab, activated with Enter or Space
 
     def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
             self.clicked.emit()
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(e)
 
 
 class Divider(QFrame):
@@ -756,9 +778,14 @@ class _Toast(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         polish(self)
 
+    on_click: Optional[Callable[[], None]] = None
+
     def mousePressEvent(self, _e) -> None:
+        action, self.on_click = self.on_click, None
         self.hide()
         self.deleteLater()
+        if action:
+            action()
 
 
 class ToastHost(QWidget):
@@ -796,8 +823,10 @@ class ToastHost(QWidget):
         self.show()
         self.raise_()
 
-    def show_toast(self, text: str, kind: str = "info", ms: int = 5000) -> None:
+    def show_toast(self, text: str, kind: str = "info", ms: int = 5000,
+                   on_click: Optional[Callable[[], None]] = None) -> None:
         t = _Toast(text, kind, self)
+        t.on_click = on_click
         t.destroyed.connect(lambda *_: QTimer.singleShot(0, self._fit))
         self._lay.addWidget(t)
         t.show()

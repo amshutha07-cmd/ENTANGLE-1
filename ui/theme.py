@@ -126,6 +126,11 @@ QPushButton[nav="true"] {{ text-align: left; background: transparent; border: no
                           padding: 11px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; }}
 QPushButton[nav="true"]:hover {{ background: {t['surface_alt']}; color: {t['text']}; }}
 QPushButton[nav="true"]:checked {{ background: {t['primary_soft']}; color: {t['primary']}; }}
+QPushButton:focus {{ border-color: {t['primary']}; }}
+QPushButton[variant="primary"]:focus, QPushButton[variant="danger"]:focus {{ border-color: {t['text']}; }}
+QPushButton[variant="ghost"]:focus {{ border-color: {t['primary']}; color: {t['text']}; }}
+QPushButton[nav="true"]:focus {{ border: 1px solid {t['primary']}; padding: 10px 13px; }}
+QFrame#Card[clickable="true"]:focus {{ border: 1px solid {t['primary']}; }}
 
 /* ── inputs ── */
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {{
