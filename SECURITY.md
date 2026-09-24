@@ -75,7 +75,7 @@ If you do enable the contracts, redeploy them (`python3 deploy_contracts.py`, ne
 
 ## Known limitations (not fixed — hardware/infra dependent)
 
-1. **NFC card is a static secret.** The PN532 sketch stores 16 bytes in a MIFARE Classic block using the *default* key `FF..FF`. Anyone with a reader who touches the card can copy it; Crypto1 is broken. Proper fix: NTAG 424 DNA (AES-128 challenge-response with rolling counter) or a DESFire/JavaCard applet, with the secret never leaving the chip. This needs new cards and firmware.
+1. **NFC card is a static secret.** The PN532 sketch stores 16 bytes in a MIFARE Classic block. Firmware v2 locks that sector with a per-card key (HMAC of the card UID with the platform secret), which stops ordinary readers and phone apps, but Crypto1 is broken: anyone who gets hold of the card with a Proxmark-class tool can recover the key and copy it. Proper fix: NTAG 424 DNA (AES-128 challenge-response with rolling counter) or a DESFire/JavaCard applet, with the secret never leaving the chip. This needs new cards and firmware.
 2. **No TPM/Secure Enclave verified.** See above. "Two hardware roots" is not something this code achieves today.
 3. **Presigned URLs last ≤7 days.** They are re-issued from stored references when the owner sends or re-opens a vault (needs the same storage credentials). A shared vault whose recipient waits >7 days needs a fresh send.
 4. **Solid or noisy carrier images are detectable by steganalysis.** Confidentiality does not depend on hiding; treat the LSB layer as cosmetic.

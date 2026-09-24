@@ -16,7 +16,7 @@ Parts B–D make it real (cloud storage, a public relay, two users).
 | `relay/Dockerfile`, `render.yaml` | **Written, never built** (no Docker here). Expect to fix small things on first build. |
 | Windows / Linux | **Code is portable but I only ran it on macOS.** |
 | Real human clicking the UI | **Not done on real hardware.** 53 automated tests (including 7 that drive the real window offscreen) pass, and every screen was rendered and inspected, but nobody has yet used it on a real desktop. |
-| NFC card | Works with your Arduino+PN532 as before, but the card is a **copyable static secret** until you buy NTAG 424 DNA. |
+| NFC card | Works with your Arduino+PN532. With reader firmware v2 each card is locked with its own key, so an ordinary reader can't read it; a specialist Mifare-cracking tool still can. **Real protection needs NTAG 424 DNA cards.** |
 | TPM backend | Written for Linux, **never run on a real TPM**. On Windows/macOS the OS keychain is used (that is not a TPM). |
 | Blockchain contracts | **Optional, off by default.** Compiled and tested on a local EVM only; not deployed. |
 | Patent PDF/TXT | Stale. Re-export from the corrected `.md` before filing. |
@@ -175,9 +175,20 @@ Render's free tier has no persistent disk, so use a small VPS (Hetzner, DigitalO
 
 1. Arduino + PN532 wired over I²C (IRQ→D2, RESET→D3, as in `arduino_nfc/arduino_nfc.ino`).
 2. Arduino IDE → install **Adafruit PN532** library → upload the sketch. **Close the Serial Monitor** afterwards (only one program can hold the port).
-3. Use **MIFARE Classic 1K** cards. The app writes a 16-character secret to block 4.
+   **Already have a reader?** Upload the sketch again after updating the app: firmware **v2** is what locks cards and
+   refuses a swapped card. The app still works with the old firmware, but logs *"The reader runs old firmware"*.
+3. Use **MIFARE Classic 1K** cards. The app writes a 16-character secret to block 4 and locks that sector with a key made
+   from the card's ID and this computer's protected secret. Cards set up before firmware v2 are locked automatically the
+   next time you log in with them (keep the card on the reader until "Protecting your card…" finishes).
 4. If the app says no reader: Windows → Device Manager shows a COM port; Linux → add yourself to `dialout` (`sudo usermod -aG dialout $USER`, re-login); macOS → `/dev/cu.usb*`.
-5. **Known weakness**: anyone who can touch the card with a reader can copy it. When you get NTAG 424 DNA cards, the firmware and `nfc_serial.py` need a challenge-response rewrite — tell me and I'll do that part.
+5. What firmware v2 protects against:
+   - **A card swapped** between the check and the write during setup: the write names the card it checked, and the
+     reader refuses any other card.
+   - **Reading the card with an ordinary reader or phone app**: they use the factory key and get nothing.
+   - **The reader getting stuck**: every wait for a card has a time limit, and Cancel works.
+6. **Known weakness**: Mifare Classic's own encryption is broken. Someone who gets hold of your card and has a
+   specialist tool (e.g. a Proxmark) can still recover its key and copy it within minutes. NTAG 424 DNA cards fix this
+   with a real challenge-response; when you get them, the firmware and `nfc_serial.py` need that rewrite.
 
 ---
 

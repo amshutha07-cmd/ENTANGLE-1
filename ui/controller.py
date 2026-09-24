@@ -155,7 +155,7 @@ class AppController(QObject):
                 # Read before writing: if this card already opens an identity here, overwriting it would lock that
                 # identity out for good. A card that cannot be read cannot be written either, so this is no extra hurdle.
                 try:
-                    current = bridge.read_payload_from_tag(timeout=45)
+                    current = bridge.read_payload_from_tag(timeout=45, cancelled=cancelled)
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if cancelled():
@@ -172,7 +172,7 @@ class AppController(QObject):
                 progress("Writing your card… keep it on the reader", 30)
                 secret = new_card_secret()
                 try:
-                    written = bridge.write_payload_to_tag(secret, timeout=45)
+                    written = bridge.write_payload_to_tag(secret, timeout=45, same_card=True)   # the card just checked
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if not written:
@@ -192,7 +192,7 @@ class AppController(QObject):
                 if not bridge.is_connected():
                     raise IdentityError("No card reader found. Plug it in and try again.")
                 try:
-                    secret = bridge.read_payload_from_tag(timeout=30) or ""
+                    secret = bridge.read_payload_from_tag(timeout=30, cancelled=cancelled) or ""
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if cancelled():
@@ -202,6 +202,14 @@ class AppController(QObject):
             progress("Unlocking…", 60)
             if not SecurityCore.verify_login(name, secret):
                 raise IdentityError("That card or passphrase does not unlock this identity.")
+            if SecurityCore.auth_mode(name) == "nfc" and getattr(bridge, "last_key", None) == "D":
+                # A card from before per-card keys: lock it now that we know it is really this person's card.
+                progress("Protecting your card… keep it on the reader", 85)
+                try:
+                    if bridge.lock_card(secret):
+                        logger.info("Card for %s is now locked with its own key.", name)
+                except nfc_serial.ReaderError as exc:
+                    logger.warning("Could not lock the card yet (will try at the next login): %s", exc)
             return name
         return Job(work, "login")
 
