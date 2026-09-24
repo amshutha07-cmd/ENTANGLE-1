@@ -5,12 +5,13 @@ Fails loudly: if the native library is missing or is a stale build, callers get
 EngineError instead of a silently "successful" no-op.
 """
 from __future__ import annotations
-
 import ctypes
 import logging
 import os
 import sys
 
+if sys.platform.startswith("win"):
+    os.add_dll_directory(r"C:\msys64\mingw64\bin")
 logger = logging.getLogger(__name__)
 
 EXPECTED_VERSION = 2

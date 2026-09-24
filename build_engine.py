@@ -77,5 +77,10 @@ def build() -> str:
 
 if __name__ == "__main__":
     path = build()
+
     import ctypes
+
+    if sys.platform.startswith("win"):
+        os.add_dll_directory(r"C:\msys64\mingw64\bin")
+
     print(f"built {os.path.basename(path)} (engine v{ctypes.CDLL(path).ansx_engine_version()})")
