@@ -796,7 +796,8 @@ class ProgressPanel(Card):
 
 class DropZone(QFrame):
     """Drop a file here or click to browse."""
-    file_chosen = pyqtSignal(str)
+    file_chosen = pyqtSignal(str)                  # the first file (older callers)
+    files_chosen = pyqtSignal(list)                # every file dropped or chosen
 
     def __init__(self, title: str = "Drop a file here", hint: str = "or click to choose one", parent=None):
         super().__init__(parent)
@@ -829,19 +830,20 @@ class DropZone(QFrame):
 
     def dropEvent(self, e) -> None:
         self._set_active(False)
-        for u in e.mimeData().urls():
-            if u.isLocalFile() and os.path.isfile(u.toLocalFile()):
-                self.file_chosen.emit(u.toLocalFile())
-                return
+        files = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
+        if files:
+            self.files_chosen.emit(files)
+            self.file_chosen.emit(files[0])
 
     def mouseReleaseEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self.choose()
 
     def choose(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a file to protect")
-        if path:
-            self.file_chosen.emit(path)
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose files to protect")   # one or several
+        if paths:
+            self.files_chosen.emit(paths)
+            self.file_chosen.emit(paths[0])
 
 
 class ListRow(QWidget):

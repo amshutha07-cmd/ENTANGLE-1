@@ -30,7 +30,9 @@ class ActionCard(ClickableCard):
         row.addWidget(self.pill)
         self.body.addLayout(row)
         self.body.addWidget(label(title, "h2", wrap=False))
-        self.body.addWidget(label(text, "muted"))
+        self.default_text = text
+        self.text = label(text, "muted")                  # replaced by live status when there is some
+        self.body.addWidget(self.text)
 
 
 class StatusTile(Card):
@@ -121,6 +123,8 @@ class HomePage(Page):
         ctl.relay_state_changed.connect(self._changed)      # bound methods: disconnected with the page
         self.refresh_while_visible(self._fill_activity)
         ctl.inbox_changed.connect(self._changed)
+        ctl.outbox_changed.connect(self._changed)             # "last sent …" on the Send tile
+        ctl.vault_changed.connect(self._changed)              # "N files protected" on the Protect tile
         ctl.activity_changed.connect(self.refresh)
         ctl.vault_changed.connect(self.refresh)
         ctl.contacts_changed.connect(self.refresh)
@@ -139,6 +143,7 @@ class HomePage(Page):
         n = len(ctl.inbox)
         self.card_inbox.pill.setVisible(bool(n))
         self.card_inbox.pill.set(f"{n} waiting", "primary")
+        self._tile_status(n)
 
         state, msg = ctl.relay_state, ctl.relay_message
         rt = self.tile_relay
@@ -184,6 +189,24 @@ class HomePage(Page):
         self.checklist.setVisible(not (done["relay"] and done["storage"]))
 
         self._fill_activity()
+
+    def _tile_status(self, waiting: int) -> None:
+        """The three big tiles double as a status line: what is protected, what went out last, what is waiting."""
+        ctl = self.ctl
+        n = len(ctl.vault_entries()) if ctl.operator else 0
+        self.card_protect.text.setText(f"{n} file{'s' if n != 1 else ''} protected. Add more any time."
+                                       if n else self.card_protect.default_text)
+        latest = max(ctl.outbox or [], key=lambda o: o.get("created", 0), default=None)
+        if latest:
+            what, when = ctl.sent_file_name(latest["id"]), time_ago(latest["created"])
+            self.card_send.text.setText(f"Last: {what} to {latest['to']}, {when}." if what
+                                        else f"Last sent to {latest['to']}, {when}.")
+        else:
+            self.card_send.text.setText(self.card_send.default_text)
+        self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} waiting for you to accept."
+                                     if waiting else
+                                     (f"Nothing new. People send to your name, {ctl.operator}." if ctl.operator
+                                      else self.card_inbox.default_text))
 
     def _fill_activity(self) -> None:
         lay = self.activity.body

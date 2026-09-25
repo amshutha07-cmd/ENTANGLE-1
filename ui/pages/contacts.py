@@ -18,6 +18,7 @@ TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified"
 
 class ContactsPage(Page):
     navigate = pyqtSignal(str)
+    send_to_requested = pyqtSignal(str)                    # "Send them a file" -> the Send page, person already chosen
 
     def __init__(self, ctl):
         super().__init__(ctl, "People & keys",
@@ -96,7 +97,13 @@ class ContactsPage(Page):
         self.remove_btn = Button("Remove this person", "ghost", "trash", "sm")
         self.remove_btn.clicked.connect(self._remove)
         self.detail.body.addWidget(self.verify_btn)
-        self.detail.body.addWidget(self.remove_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.send_btn = Button("Send them a file", "secondary", "send")
+        self.send_btn.clicked.connect(lambda: self._selected and self.send_to_requested.emit(self._selected))
+        more = QHBoxLayout()
+        more.addWidget(self.send_btn)
+        more.addStretch()
+        more.addWidget(self.remove_btn)
+        self.detail.body.addLayout(more)
         self.detail.body.addStretch()
         # Details (with their buttons) on the left: notifications stack up in the window's bottom-right corner.
         row.addWidget(self.detail, 6)

@@ -17,6 +17,7 @@ from ui import art, motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill,
     FitStack, ProgressPanel, Stepper, escape_goes_back, file_icon, friendly_date, human_size, label, on_enter,
+    time_ago,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -40,6 +41,7 @@ class SendPage(Page):
         super().__init__(ctl, "Send a file", "Only the person you choose can open it. You'll be told when they accept.")
         self.entry_id: Optional[str] = None
         self.recipient: Optional[str] = None
+        self._recipient_preset = False                       # person chosen first (People / Inbox)
         self.step = 0
         self._job: Optional[Job] = None
 
@@ -222,6 +224,8 @@ class SendPage(Page):
 
     def reset(self) -> None:
         self.entry_id = self.recipient = None
+        self._recipient_preset = False
+        self.files_heading.setText("Which file do you want to send?")
         self._job = None
         self.search.clear()
         self.error.hide()
@@ -229,6 +233,15 @@ class SendPage(Page):
         self.progress.finish()
         self._fill_files()
         self._fill_people()
+        self._go(0)
+
+    def send_to(self, name: str) -> None:
+        """Start sending to `name` (from People & keys, or replying to an inbox item): pick a file, then review."""
+        self.reset()
+        self.recipient = name
+        self._recipient_preset = True
+        self._fill_people()
+        self.files_heading.setText(f"Which file should {name} get?")
         self._go(0)
 
     def preselect(self, entry_id: str) -> None:
@@ -275,6 +288,12 @@ class SendPage(Page):
         self.people.clear()
         needle = self.search.text().strip().lower()
         contacts = [c for c in self.ctl.contacts() if needle in c["operator"].lower()]
+        last = {}                                               # when I last sent to each person
+        for o in self.ctl.outbox or []:
+            last[o["to"]] = max(last.get(o["to"], 0), o.get("created", 0))
+        # the people you actually send to come first, then verified people, then everyone alphabetically
+        contacts.sort(key=lambda c: (-last.get(c["operator"], 0), self.ctl.trust(c["operator"]) != "verified",
+                                     c["operator"].lower()))
         for c in contacts:
             trust = self.ctl.trust(c["operator"])
             text, kind = TRUST_PILL[trust]
@@ -282,8 +301,10 @@ class SendPage(Page):
             it.setData(Qt.ItemDataRole.UserRole, c["operator"])
             it.setSizeHint(QSize(0, 62))
             self.people.addItem(it)
-            self.people.setItemWidget(it, ListRow(c["operator"], "Verified key" if trust == "verified" else "Key not verified yet",
-                                                  avatar=c["operator"], right=[Pill(text, kind)]))
+            sub = "Verified key" if trust == "verified" else "Key not verified yet"
+            if c["operator"] in last:
+                sub += f" · you last sent them a file {time_ago(last[c['operator']])}"
+            self.people.setItemWidget(it, ListRow(c["operator"], sub, avatar=c["operator"], right=[Pill(text, kind)]))
             if c["operator"] == self.recipient:
                 self.people.setCurrentItem(it)
         self.people.blockSignals(False)
@@ -394,7 +415,9 @@ class SendPage(Page):
             self._go(i)
 
     def _next(self) -> None:
-        if self.step == 0 and self.entry_id:
+        if self.step == 0 and self.entry_id and self._recipient_preset and self.recipient:
+            self._go(2)                                        # the person was chosen before the file: review now
+        elif self.step == 0 and self.entry_id:
             self._go(1)
             if not self.ctl.contacts():
                 self._refresh_people()

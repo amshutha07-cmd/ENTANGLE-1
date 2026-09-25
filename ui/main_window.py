@@ -308,6 +308,8 @@ class MainWindow(QMainWindow):
             page = self.pages[key]
             if hasattr(page, "navigate"):
                 page.navigate.connect(self.go)
+            if hasattr(page, "send_to_requested"):
+                page.send_to_requested.connect(self._send_to)
         self.pages["vault"].send_requested.connect(self._send_entry)
         self.pages["settings"].theme_changed.connect(self.set_theme)
         self.pages["settings"].lock_requested.connect(self._lock)
@@ -342,34 +344,34 @@ class MainWindow(QMainWindow):
             page.show_tab("received")
 
     # ── drop a file anywhere to protect it ───────────────────────────────────
-    def _dropped_file(self, mime) -> Optional[str]:
+    def _dropped_files(self, mime) -> list:
+        """The files (not folders) in a drop, while signed in."""
         if self.root_stack.currentIndex() != 1 or not mime.hasUrls():
-            return None
-        files = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
-        return files[0] if len(files) == 1 and os.path.isfile(files[0]) else None
+            return []
+        return [u.toLocalFile() for u in mime.urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
 
     def dragEnterEvent(self, e) -> None:
-        if self._dropped_file(e.mimeData()):
+        if self._dropped_files(e.mimeData()):
             e.acceptProposedAction()
 
     def dropEvent(self, e) -> None:
-        path = self._dropped_file(e.mimeData())
-        if not path:
+        paths = self._dropped_files(e.mimeData())
+        if not paths:
             return
         e.acceptProposedAction()
         send = self.pages["send"]
-        if self.content.currentWidget() is send:            # on Send: protect it and carry on sending it
+        if self.content.currentWidget() is send and len(paths) == 1:   # on Send: protect it and carry on sending
             if send._job is not None:
                 self.toasts_show("Still working on the last file. Drop the next one when it has finished.", "warning")
             else:
-                send.protect_and_continue(path)
+                send.protect_and_continue(paths[0])
             return
         vault = self.pages["vault"]
-        if vault._job is not None:
-            self.toasts_show("Already protecting a file. Drop the next one when it has finished.", "warning")
-            return
+        busy = vault._job is not None
         self.go("vault")
-        vault.protect_file(path)
+        vault.protect_files(paths)                          # several at once: protected one after another
+        if busy:
+            self.toasts_show(f"Added {len(paths)} file(s) to the queue.", "info")
 
     # ── reopen where it was ──────────────────────────────────────────────────
     def _save_window_place(self) -> None:
@@ -455,6 +457,10 @@ class MainWindow(QMainWindow):
         if self.root_stack.currentIndex() == 1:
             self.go("vault")
             self.pages["vault"].drop.choose()
+
+    def _send_to(self, name: str) -> None:
+        self.pages["send"].send_to(name)
+        self.go("send")
 
     def _send_entry(self, entry_id: str) -> None:
         self.pages["send"].preselect(entry_id)

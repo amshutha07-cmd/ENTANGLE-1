@@ -74,8 +74,8 @@ class VaultPage(Page):
             lambda: self.navigate.emit("settings"))
         self.root.addWidget(self.storage_banner)
 
-        self.drop = DropZone("Drop a file here to protect it", "or click to choose one from your computer")
-        self.drop.file_chosen.connect(self.protect_file)
+        self.drop = DropZone("Drop files here to protect them", "or click to choose one or more from your computer")
+        self.drop.files_chosen.connect(self.protect_files)
         self.root.addWidget(self.drop)
 
         self.progress = ProgressPanel()
@@ -98,6 +98,9 @@ class VaultPage(Page):
         head.addWidget(self.filter)
         self.root.addLayout(head)
         self._flash_id: Optional[str] = None
+        self._queue: list[str] = []                              # files waiting to be protected, in order
+        self._batch = {"total": 0, "done": [], "failed": []}
+        self._current_name = ""
         self.list_card = Card(padding=6, spacing=0)
         self.root.addWidget(self.list_card)
         self.root.addStretch(1)
@@ -114,14 +117,44 @@ class VaultPage(Page):
 
     # ── protecting ───────────────────────────────────────────────────────────
     def protect_file(self, path: str) -> None:
-        if self._job is not None:
+        self.protect_files([path])
+
+    def protect_files(self, paths: list) -> None:
+        """Protect one or several files, one after another. More can be added while it works (they join the queue)."""
+        files = [p for p in paths if os.path.isfile(p)]
+        if not files:
             return
-        self.result.hide()
+        if self._job is None and not self._queue:           # a new batch
+            self._batch = {"total": 0, "done": [], "failed": []}
+            self.result.hide()
+        elif self._job is not None and self._job.name != "protect":
+            self.ctl.toast.emit("Wait for the restore to finish, then protect more files.", "warning")
+            return
+        self._batch["total"] += len(files)
+        self._queue.extend(files)
+        if self._job is None:
+            self._start_next()
+        elif self._batch["total"] > 1:
+            self._retitle()
+
+    def _batch_position(self) -> int:
+        b = self._batch
+        return len(b["done"]) + len(b["failed"]) + 1
+
+    def _retitle(self) -> None:
+        b = self._batch
+        base = f"Protecting {self._current_name}"
+        self.progress.title.setText(f"{base}  ({self._batch_position()} of {b['total']})" if b["total"] > 1 else base)
+
+    def _start_next(self) -> None:
+        path = self._queue.pop(0)
+        self._current_name = os.path.basename(path)
         self.drop.setEnabled(False)
-        self.progress.start(f"Protecting {os.path.basename(path)}")
+        self.progress.start("")
+        self._retitle()
         job = self.ctl.make_protect_job(path)
         self._job = job
-        self.ctl.run_job(job, on_success=self._protected, on_fail=self._failed, on_cancel=self._cancelled,
+        self.ctl.run_job(job, on_success=self._protected, on_fail=self._protect_failed, on_cancel=self._cancelled,
                          on_progress=lambda text, pct: self.progress.update_progress(text, pct))
 
     def _done(self) -> None:
@@ -130,12 +163,20 @@ class VaultPage(Page):
         self.progress.finish()
 
     def _protected(self, res) -> None:
-        self._done()
+        self._job = None
         self.ctl.after_protect(res)
-        name = res.entry["original_filename"]
-        self._last_protected = res.entry["id"]
+        self._batch["done"].append(res)
         self._flash_id = res.entry["id"]
         self.refresh()
+        if self._queue:
+            self._start_next()
+            return
+        self._done()
+        if self._batch["total"] > 1:
+            self._batch_summary()
+            return
+        name = res.entry["original_filename"]
+        self._last_protected = res.entry["id"]
         self.result._btn.show()
         if res.storage_configured and res.upload_errors:
             msg = (f"“{name}” is protected, but {len(res.upload_errors)} piece(s) could not be uploaded, so they are kept "
@@ -147,6 +188,32 @@ class VaultPage(Page):
             self.result.set(f"“{name}” is protected. All 12 pieces are kept inside the package.", "success")
         motion.reveal(self.result)
         self.notify_if_away(f"{name} is protected.", "success")
+
+    def _protect_failed(self, message: str) -> None:
+        self._job = None
+        self._batch["failed"].append((self._current_name, message))
+        if self._queue:                                     # one bad file does not stop the others
+            self._start_next()
+            return
+        if self._batch["total"] > 1:
+            self._done()
+            self._batch_summary()
+        else:
+            self._failed(message)
+
+    def _batch_summary(self) -> None:
+        b = self._batch
+        ok, bad = len(b["done"]), b["failed"]
+        self._last_protected = None
+        self.result._btn.hide()
+        if not bad:
+            self.result.set(f"All {ok} files are protected. Send any of them from the list below.", "success")
+            self.notify_if_away(f"{ok} files protected.", "success")
+        else:
+            why = "; ".join(f"“{n}”: {m}" for n, m in bad[:3]) + ("; …" if len(bad) > 3 else "")
+            self.result.set(f"{ok} of {b['total']} files protected. Not protected: {why}", "warning" if ok else "danger")
+            self.notify_if_away(f"{ok} of {b['total']} files protected.", "warning")
+        motion.reveal(self.result)
 
     def _send_last(self) -> None:
         if self._last_protected:
@@ -164,8 +231,10 @@ class VaultPage(Page):
         self._failed(message, "restore the file")
 
     def _cancelled(self) -> None:
+        left = len(self._queue)
+        self._queue.clear()                                   # cancelling stops the whole batch
         self._done()
-        self.ctl.toast.emit("Cancelled.", "info")
+        self.ctl.toast.emit(f"Cancelled. {left} more file(s) were not started." if left else "Cancelled.", "info")
 
     def _cancel(self) -> None:
         if self._job:

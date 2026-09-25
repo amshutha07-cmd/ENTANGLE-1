@@ -178,7 +178,7 @@ def test_dropping_a_file_anywhere_protects_it(tmp_path):
     win = MainWindow(AppController())
     win.root_stack.setCurrentIndex(1)
     started = []
-    win.pages["vault"].protect_file = started.append
+    win.pages["vault"].protect_files = started.append
 
     class Drop:
         def __init__(self, paths):
@@ -196,10 +196,13 @@ def test_dropping_a_file_anywhere_protects_it(tmp_path):
     win.dragEnterEvent(d)
     assert d.accepted
     win.dropEvent(d)
-    assert started == [str(f)] and win.content.currentWidget() is win.pages["vault"]
-    two = Drop([f, f])                                        # one file at a time
+    assert started == [[str(f)]] and win.content.currentWidget() is win.pages["vault"]
+    g = tmp_path / "notes.txt"
+    g.write_bytes(b"y")
+    two = Drop([f, g])                                        # several files: all of them, one after another
     win.dragEnterEvent(two)
-    assert not two.accepted
+    win.dropEvent(two)
+    assert two.accepted and started[-1] == [str(f), str(g)]
     folder = Drop([tmp_path])                                 # a folder is not a file
     win.dragEnterEvent(folder)
     assert not folder.accepted

@@ -534,6 +534,10 @@ class AppController(QObject):
                 raise
             self._send_resume.pop(key, None)
             _silent_remove(out_path)                       # the sender cannot open it anyway; leave no copy
+            try:
+                self.remember_sent(tid, entry.get("original_filename", ""))   # so "Sent" can name the file
+            except OSError:
+                pass
             return {"id": tid, "to": recipient}
         return Job(work, "send")
 

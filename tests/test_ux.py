@@ -239,7 +239,7 @@ def test_dropping_a_file_on_the_send_page_protects_it_for_sending(signed_in, tmp
     sp = win.pages["send"]
     routed = []
     sp.protect_and_continue = routed.append
-    win.pages["vault"].protect_file = lambda p: routed.append(("vault", p))
+    win.pages["vault"].protect_files = lambda ps: routed.append(("vault", ps[0]))
 
     class Drop:
         def __init__(self):
@@ -347,3 +347,120 @@ def test_enter_picks_and_escape_goes_back(signed_in):
     assert sp.search.text() == "" and sp.step == 1            # Esc first clears the search…
     sp._escape.activated.emit()
     assert sp.step == 0                                       # …then goes back a step
+
+
+def _fake_protect(ctl, monkeypatch, fail=()):
+    """make_protect_job that 'protects' instantly (a real vault entry, no encryption), failing for names in `fail`."""
+    from types import SimpleNamespace
+    from ui.controller import Job
+
+    def make(path):
+        def work(progress, cancelled):
+            name = os.path.basename(path)
+            if name in fail:
+                raise __import__("vault_service").VaultError("The file could not be read.")
+            entry = VaultLedger.add_entry(name, f"/nowhere/{name}.png", "2026-09-25 09:00:00", size=10,
+                                          storage={"inline": 12}, owner=ctl.operator)
+            return SimpleNamespace(entry=entry, cloud=0, inline=12, upload_errors={}, storage_configured=False)
+        return Job(work, "protect")
+    monkeypatch.setattr(ctl, "make_protect_job", make)
+
+
+def _wait(cond, s=8):
+    end = time.time() + s
+    while not cond() and time.time() < end:
+        app.processEvents()
+        time.sleep(0.01)
+    return cond()
+
+
+def test_several_files_are_protected_in_one_go_and_a_bad_one_does_not_stop_the_rest(signed_in, monkeypatch, tmp_path):
+    ctl, win = signed_in
+    _fake_protect(ctl, monkeypatch, fail={"broken.bin"})
+    files = []
+    for n in ("a.pdf", "broken.bin", "c.txt"):
+        (tmp_path / n).write_bytes(b"x")
+        files.append(str(tmp_path / n))
+    vp = win.pages["vault"]
+    win.go("vault")
+    titles = []
+    orig = vp.progress.title.setText
+    vp.progress.title.setText = lambda t: (titles.append(t), orig(t))
+    vp.protect_files(files)
+    assert _wait(lambda: vp._job is None and not vp._queue)
+    assert any("(2 of 3)" in t for t in titles)                    # you can see where it is in the batch
+    msg = vp.result._text.text()
+    assert "2 of 3 files protected" in msg and "broken.bin" in msg and not vp.result._btn.isVisible()
+
+
+def test_cancelling_stops_the_whole_batch(signed_in, monkeypatch, tmp_path):
+    ctl, win = signed_in
+    vp = win.pages["vault"]
+    for n in ("x1.pdf", "x2.pdf", "x3.pdf"):
+        (tmp_path / n).write_bytes(b"x")
+    vp._queue = [str(tmp_path / "x2.pdf"), str(tmp_path / "x3.pdf")]
+    vp._cancelled()
+    assert vp._queue == []
+
+
+def test_send_them_a_file_skips_choosing_the_person(signed_in, monkeypatch):
+    from PyQt6.QtCore import Qt
+    ctl, win = signed_in
+    SecurityCore.pin_discovered_contact("sam_friend", SecurityCore.load_identity_for_user("ux_user")["public_key"], "relay")
+    e = VaultLedger.add_entry("plan.pdf", "/x/p.png", "2026-09-25 09:00:00", size=10, storage={}, owner="ux_user")
+    cp = win.pages["contacts"]
+    win.go("contacts")
+    cp.select("sam_friend")
+    cp.send_btn.click()
+    sp = win.pages["send"]
+    assert win.content.currentWidget() is sp and sp.recipient == "sam_friend" and sp.step == 0
+    assert sp.files_heading.text() == "Which file should sam_friend get?"
+    for i in range(sp.files.count()):
+        if sp.files.item(i).data(Qt.ItemDataRole.UserRole) == e["id"]:
+            sp.files.setCurrentRow(i)
+    sp._next()
+    assert sp.step == 2                                           # straight to review: the person was already chosen
+    sp._back()
+    assert sp.step == 1 and sp.recipient == "sam_friend"          # and they can still change their mind
+
+
+def test_reply_from_the_inbox_sends_back_to_the_sender(signed_in):
+    ctl, win = signed_in
+    now = int(time.time())
+    ctl.inbox = [{"id": "r1", "from": "alex_r", "size": 10, "created": now, "expires": now + 86400,
+                  "sender_fingerprint": FP}]
+    ib = win.pages["inbox"]
+    win.go("inbox")
+    ib._fill_inbox(ctl.inbox)
+    ib.reply_btn.click()
+    assert win.content.currentWidget() is win.pages["send"] and win.pages["send"].recipient == "alex_r"
+
+
+def test_the_people_you_send_to_come_first(signed_in):
+    from PyQt6.QtCore import Qt
+    ctl, win = signed_in
+    key = SecurityCore.load_identity_for_user("ux_user")["public_key"]
+    for n in ("aaron_new", "zoe_often"):
+        SecurityCore.pin_discovered_contact(n, key, "relay")
+    now = int(time.time())
+    ctl.outbox = [{"id": "o1", "to": "zoe_often", "size": 1, "created": now - 60, "state": "delivered"}]
+    sp = win.pages["send"]
+    sp._fill_people()
+    order = [sp.people.item(i).data(Qt.ItemDataRole.UserRole) for i in range(sp.people.count())]
+    assert order.index("zoe_often") < order.index("aaron_new")    # recent beats alphabetical
+    row = sp.people.itemWidget(sp.people.item(order.index("zoe_often")))
+    assert "last sent them a file" in row.subtitle.text()
+
+
+def test_home_tiles_show_live_status(signed_in):
+    ctl, win = signed_in
+    hp = win.pages["home"]
+    now = int(time.time())
+    VaultLedger.add_entry("one.pdf", "/x/1.png", "2026-09-25 09:00:00", size=1, storage={}, owner="ux_user")
+    ctl.remember_sent("s9", "one.pdf")
+    ctl.outbox = [{"id": "s9", "to": "sam", "size": 1, "created": now - 120, "state": "ready"}]
+    ctl.inbox = [{"id": "i1", "from": "alex", "size": 1, "created": now, "expires": now + 86400}]
+    hp.refresh()
+    assert "protected" in hp.card_protect.text.text()
+    assert hp.card_send.text.text().startswith("Last: one.pdf to sam")
+    assert hp.card_inbox.text.text() == "1 file waiting for you to accept."

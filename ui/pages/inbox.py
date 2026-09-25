@@ -42,6 +42,7 @@ def _days_left(expires: int) -> str:
 
 class InboxPage(Page):
     navigate = pyqtSignal(str)
+    send_to_requested = pyqtSignal(str)                    # "Send a file back" to whoever sent this
 
     def __init__(self, ctl):
         super().__init__(ctl, "Inbox", "Nothing is opened until you accept it.")
@@ -125,6 +126,9 @@ class InboxPage(Page):
         row.addWidget(self.accept_btn, 1)
         row.addWidget(self.decline_btn)
         self.detail.body.addLayout(row)
+        self.reply_btn = Button("Send a file back", "ghost", "send", "sm")
+        self.reply_btn.clicked.connect(lambda: self._current and self.send_to_requested.emit(self._current["from"]))
+        self.detail.body.addWidget(self.reply_btn, 0, Qt.AlignmentFlag.AlignLeft)
         self.detail.body.addStretch()
         rl.addWidget(self.detail, 6)
         self.stack.addWidget(rec)
