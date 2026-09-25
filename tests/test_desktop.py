@@ -44,8 +44,8 @@ def test_tray_menu_opens_locks_and_quits(monkeypatch):
     monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True))
     win = MainWindow(AppController())
     assert win._tray is not None
-    labels = [a.text() for a in win._tray_menu.actions()]
-    assert labels == ["Open A.N.Sx Vault", "Lock now", "", "Quit"]
+    labels = [a.text() for a in win._tray_menu.actions() if a.isVisible() and not a.isSeparator()]
+    assert labels == ["Locked", "Open A.N.Sx Vault", "Lock now", "Quit"]          # a status line, then the commands
     win._tray_menu_opening()
     assert not win._tray_lock.isEnabled()                                          # signed out: nothing to lock
     win.root_stack.setCurrentIndex(1)
@@ -57,6 +57,9 @@ def test_tray_menu_opens_locks_and_quits(monkeypatch):
     win._tray.hide()
 
 
+COMMAND_KEYS = ["Ctrl+O", "Ctrl+L", "Ctrl+Q", "Ctrl+W", "Ctrl+F", "Ctrl+,", "Ctrl+/"] + [f"Ctrl+{i}" for i in range(1, 7)]
+
+
 def test_each_shortcut_is_bound_exactly_once():
     from PyQt6.QtGui import QShortcut
     from ui.main_window import MainWindow
@@ -64,7 +67,7 @@ def test_each_shortcut_is_bound_exactly_once():
     from PyQt6.QtCore import Qt
     window_wide = [s for s in win.findChildren(QShortcut) if s.context() == Qt.ShortcutContext.WindowShortcut]
     keys = [s.key().toString() for s in window_wide]              # (pages also have their own Esc, scoped to them)
-    assert sorted(keys) == sorted(["Ctrl+O", "Ctrl+L", "Ctrl+Q"] + [f"Ctrl+{i}" for i in range(1, 7)])
+    assert sorted(keys) == sorted(COMMAND_KEYS)
 
 
 def test_mac_menu_bar_holds_the_commands(monkeypatch):
@@ -72,9 +75,11 @@ def test_mac_menu_bar_holds_the_commands(monkeypatch):
     from ui.main_window import MainWindow
     monkeypatch.setattr(QApplication, "platformName", staticmethod(lambda: "cocoa"))
     win = MainWindow(AppController())
-    assert list(win._menus) == ["File", "Go", "Help"]
+    assert list(win._menus) == ["File", "Edit", "Go", "Help"]
     shortcuts = [a.shortcut().toString() for m in win._menus.values() for a in m.actions() if not a.shortcut().isEmpty()]
-    assert sorted(shortcuts) == sorted(["Ctrl+O", "Ctrl+L", "Ctrl+Q"] + [f"Ctrl+{i}" for i in range(1, 7)])
+    assert sorted(shortcuts) == sorted(COMMAND_KEYS)
+    prefs = [a for a in win._menus["File"].actions() if a.text() == "Settings…"][0]
+    assert prefs.menuRole() == prefs.MenuRole.PreferencesRole                      # ⌘, in the app menu on macOS
     from PyQt6.QtCore import Qt
     assert not [s for s in win.findChildren(QShortcut)
                 if s.context() == Qt.ShortcutContext.WindowShortcut]                   # not also bound on the window

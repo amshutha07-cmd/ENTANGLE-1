@@ -4,18 +4,40 @@ from __future__ import annotations
 import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 import platform_secret
-from ui import icons, theme
+from ui import icons, motion, theme
 from ui.pages.base import Page
-from ui.widgets import Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, clear_layout, label, time_ago
+from ui.widgets import (
+    Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, ProgressRing, clear_layout, label, time_ago,
+)
 
 ACTIVITY_STYLE = {
     "protected": ("shield", "success"), "sent": ("send", "primary"), "delivered": ("check", "success"),
     "received": ("download", "success"), "declined": ("x", "warning"), "restored": ("unlock", "info"),
     "security": ("key", "neutral"), "error": ("alert", "danger"),
 }
+
+
+ACTIVITY_LINK = {"protected": "vault", "restored": "vault", "sent": "sent", "delivered": "sent", "declined": "sent",
+                 "received": "inbox"}
+LINK_TIP = {"vault": "Open Protect", "sent": "See what you sent", "inbox": "Open your inbox"}
+
+
+class _ActivityRow(QWidget):
+    """A line in Recent activity that leads to where it happened."""
+    clicked = pyqtSignal()
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.pos()):
+            self.clicked.emit()
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(e)
 
 
 class ActionCard(ClickableCard):
@@ -60,9 +82,49 @@ class StatusTile(Card):
         self.action.setText(action)
 
 
+def _names(names: list) -> str:
+    """sam · sam and alex · sam, alex and 2 others"""
+    if len(names) <= 2:
+        return " and ".join(names)
+    rest = len(names) - 2
+    return f"{names[0]}, {names[1]} and {rest} other{'s' if rest != 1 else ''}"
+
+
 def _greeting() -> str:
     h = datetime.datetime.now().hour
     return "Good morning" if h < 12 else "Good afternoon" if h < 18 else "Good evening"
+
+
+class KeyChip(QPushButton):
+    """Your key fingerprint, short like a wallet address. A click copies all of it, to read to someone verifying you."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setProperty("chip", "key")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self._fp = ""
+        self.clicked.connect(self._copy)
+        self.hide()
+
+    def set_fingerprint(self, fp: str) -> None:
+        self._fp = fp
+        groups = fp.split()
+        self._short = f"{groups[0]} … {groups[-1]}" if len(groups) > 2 else fp
+        self.setIcon(icons.icon("key", theme.color("primary"), 16))      # re-coloured on every refresh (theme)
+        self.setText(self._short)
+        self.setToolTip("Your key fingerprint. Click to copy all of it, to read to someone who wants to verify you.")
+        self.setAccessibleName(f"Your key fingerprint {fp}. Copy")
+        self.setVisible(bool(fp))
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self._fp)
+        self.setIcon(icons.icon("check", theme.color("primary"), 16))
+        self.setText("Copied")
+        motion.later(1400, self._restore)
+
+    def _restore(self) -> None:
+        self.set_fingerprint(self._fp)
 
 
 class HomePage(Page):
@@ -70,6 +132,9 @@ class HomePage(Page):
 
     def __init__(self, ctl):
         super().__init__(ctl, "Home", "")
+        self.key_chip = KeyChip()
+        self.actions.addWidget(self.key_chip, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._fp_for: tuple = ("", "")
         self.card_protect = ActionCard("shield", "Protect a file", "Encrypt it and keep it safe, ready to send.")
         self.card_send = ActionCard("send", "Send a file", "Only the person you choose can open it.")
         self.card_inbox = ActionCard("inbox", "Inbox", "Files people have sent you.")
@@ -82,7 +147,11 @@ class HomePage(Page):
 
         self.checklist = Card(padding=18, spacing=8)
         self.check_rows: dict[str, QLabel] = {}
-        self.checklist.body.addWidget(label("Finish setting up", "h2", wrap=False))
+        head = QHBoxLayout()
+        head.addWidget(label("Finish setting up", "h2", wrap=False), 1)
+        self.check_ring = ProgressRing(40)
+        head.addWidget(self.check_ring, 0, Qt.AlignmentFlag.AlignTop)
+        self.checklist.body.addLayout(head)
         self.check_progress = label("", "muted")
         self.checklist.body.addWidget(self.check_progress)
         self.check_actions: dict[str, Button] = {}
@@ -139,6 +208,9 @@ class HomePage(Page):
         ctl = self.ctl
         name = ctl.operator or ""
         self.header.title.setText(f"{_greeting()}, {name}" if name else "Home")
+        if self._fp_for[0] != name:                       # the fingerprint is worked out once per identity
+            self._fp_for = (name, ctl.my_fingerprint() if name else "")
+        self.key_chip.set_fingerprint(self._fp_for[1])
 
         n = len(ctl.inbox)
         self.card_inbox.pill.setVisible(bool(n))
@@ -186,6 +258,7 @@ class HomePage(Page):
             self.check_texts[key].style().polish(self.check_texts[key])
         n = sum(done.values())
         self.check_progress.setText(f"{n} of {len(done)} done. Each step takes a minute or two.")
+        self.check_ring.set(n, len(done))
         self.checklist.setVisible(not (done["relay"] and done["storage"]))
 
         self._fill_activity()
@@ -203,7 +276,10 @@ class HomePage(Page):
                                         else f"Last sent to {latest['to']}, {when}.")
         else:
             self.card_send.text.setText(self.card_send.default_text)
-        self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} waiting for you to accept."
+        senders = sorted({i.get("from", "") for i in ctl.inbox or []} - {""})
+        self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} from {_names(senders)}, waiting for "
+                                     "you to accept." if waiting and senders else
+                                     f"{waiting} file{'s' if waiting != 1 else ''} waiting for you to accept."
                                      if waiting else
                                      (f"Nothing new. People send to your name, {ctl.operator}." if ctl.operator
                                       else self.card_inbox.default_text))
@@ -223,7 +299,8 @@ class HomePage(Page):
             return
         for it in items:
             icon, kind = ACTIVITY_STYLE.get(it["kind"], ("info", "neutral"))
-            row = QWidget()
+            target = ACTIVITY_LINK.get(it["kind"])
+            row = _ActivityRow() if target else QWidget()
             hl = QHBoxLayout(row)
             hl.setContentsMargins(12, 9, 12, 9)
             hl.setSpacing(12)
@@ -235,4 +312,14 @@ class HomePage(Page):
                 col.addWidget(ElidedLabel(it["detail"], "muted"))
             hl.addLayout(col, 1)
             hl.addWidget(label(time_ago(it["ts"]), "faint", wrap=False))
+            if target:
+                row.setObjectName("ActivityRow")
+                row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                row.setCursor(Qt.CursorShape.PointingHandCursor)
+                row.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+                row.setToolTip(LINK_TIP[target])
+                row.clicked.connect(lambda t=target: self.navigate.emit(t))
+                go = QLabel()
+                go.setPixmap(icons.pixmap("chevron", theme.color("text_faint"), 16))
+                hl.addWidget(go)
             lay.addWidget(row)

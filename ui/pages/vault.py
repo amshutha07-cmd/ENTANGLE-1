@@ -6,16 +6,16 @@ from typing import Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
-from ui.controller import Job
+from ui.controller import Job, pref, set_pref
 from ui.dialogs import confirm_remove
 from ui.pages.base import Page
 from ui import motion, theme
 from ui.widgets import (
     clear_layout,
     Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
-    human_size, label,
+    human_size, label, esc_clears,
 )
 
 
@@ -88,14 +88,24 @@ class VaultPage(Page):
         self.root.addWidget(self.result)
 
         head = QHBoxLayout()
-        head.addWidget(label("YOUR PROTECTED FILES", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
+        self.list_title = label("YOUR PROTECTED FILES", "eyebrow", wrap=False)
+        head.addWidget(self.list_title, 1, Qt.AlignmentFlag.AlignBottom)
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Search your files")
         self.filter.setClearButtonEnabled(True)
+        esc_clears(self.filter)
         self.filter.setMaximumWidth(260)
         self.filter.textChanged.connect(lambda _t: self.refresh())
         self.filter.hide()                                # only once the list is long enough to need it
         head.addWidget(self.filter)
+        self.sort = QComboBox()                           # and a way to order it, remembered
+        for text, key in (("Newest first", "newest"), ("Name A–Z", "name"), ("Largest first", "size")):
+            self.sort.addItem(text, key)
+        self.sort.setCurrentIndex(max(0, self.sort.findData(pref("vault_sort", "newest"))))
+        self.sort.setToolTip("Order of your protected files")
+        self.sort.currentIndexChanged.connect(self._sort_picked)
+        self.sort.hide()
+        head.addWidget(self.sort)
         self.root.addLayout(head)
         self._flash_id: Optional[str] = None
         self._queue: list[str] = []                              # files waiting to be protected, in order
@@ -243,13 +253,28 @@ class VaultPage(Page):
             self.progress.detail.setText("Cancelling…")
 
     # ── list ─────────────────────────────────────────────────────────────────
+    def _sort_picked(self, _i: int) -> None:
+        set_pref("vault_sort", self.sort.currentData())
+        self.refresh()
+
     def refresh(self) -> None:
         lay = self.list_card.body
         clear_layout(lay)
         everything = self.ctl.vault_entries()
         self.filter.setVisible(len(everything) > 6 or bool(self.filter.text()))
+        self.sort.setVisible(len(everything) > 6)
+        total = sum(e.get("size") or 0 for e in everything)
+        self.list_title.setText(f"YOUR PROTECTED FILES · {len(everything)} · {human_size(total).upper()}" if everything
+                                else "YOUR PROTECTED FILES")
         needle = self.filter.text().strip().lower()
         entries = [e for e in everything if needle in e["original_filename"].lower()]
+        order = self.sort.currentData()
+        if order == "name":
+            entries.sort(key=lambda e: e["original_filename"].casefold())
+        elif order == "size":
+            entries.sort(key=lambda e: e.get("size") or 0, reverse=True)
+        else:
+            entries.sort(key=lambda e: e.get("date_vaulted", ""), reverse=True)
         if not everything:
             lay.addWidget(EmptyState("shield", "No protected files yet",
                                      "Drop a file above. You can then send it, or restore it any time."))

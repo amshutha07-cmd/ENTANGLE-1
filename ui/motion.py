@@ -261,6 +261,35 @@ def pulse(obj: QObject, prop: bytes, peak: float = 1.35, ms: int = SLOW) -> None
     anim.start()
 
 
+def crossfade(w: QWidget, change: Callable[[], None], ms: int = SLOW) -> None:
+    """
+    Make a sweeping change (e.g. the theme) look like one smooth step: a picture of how `w` looked is laid over it,
+    `change` runs underneath, and the picture fades away. The picture never takes a click.
+    """
+    if reduced() or w is None or not w.isVisible():
+        change()
+        return
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QLabel
+    veil = QLabel(w)
+    veil.setPixmap(w.grab())
+    veil.setGeometry(w.rect())
+    veil.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    veil.show()
+    veil.raise_()
+    change()
+    veil.raise_()                                     # above anything the change brought to the front
+    eff = QGraphicsOpacityEffect(veil)
+    veil.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b"opacity", veil)
+    anim.setDuration(ms)
+    anim.setStartValue(1.0)
+    anim.setEndValue(0.0)
+    anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+    anim.finished.connect(veil.deleteLater)
+    anim.start()
+
+
 def later(ms: int, fn: Callable[[], None]) -> None:
     """Run fn after ms; quietly does nothing if the widget it touches has been deleted by then."""
     def run() -> None:

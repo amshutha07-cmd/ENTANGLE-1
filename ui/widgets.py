@@ -9,11 +9,14 @@ import os
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
-    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtProperty, pyqtSignal,
+    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, QVariantAnimation,
+    pyqtProperty, pyqtSignal,
 )
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen, QRegion
+from PyQt6.QtGui import (
+    QBrush, QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
+)
 from PyQt6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
+    QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QProgressBar,
     QBoxLayout, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
 )
 
@@ -172,6 +175,22 @@ def time_ago(ts: int) -> str:
 
 
 # ── layout helpers ───────────────────────────────────────────────────────────────────────────────
+class _EscClears(QObject):
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) and ev.key() == Qt.Key.Key_Escape \
+                and obj.text():
+            if ev.type() == QEvent.Type.KeyPress:
+                obj.clear()
+            ev.accept()                                   # the box takes Esc: not also "back" or "close"
+            return True
+        return False
+
+
+def esc_clears(edit: QLineEdit) -> None:
+    """Esc empties a search box, as on a Mac. On an empty box Esc does whatever it would have done anyway."""
+    edit.installEventFilter(_EscClears(edit))
+
+
 class _FitLayout(QStackedLayout):
     """Reports the CURRENT page's size (QStackedLayout reports the largest page, including its height-for-width)."""
 
@@ -276,6 +295,25 @@ class ElidedLabel(QLabel):
 
 
 # ── buttons ──────────────────────────────────────────────────────────────────────────────────────
+def _spinner_icon(color: str, size: int, angle: float) -> QIcon:
+    """A 270° neon arc turned by `angle`: one frame of a loading spinner, the same when the button is disabled."""
+    ratio = 2.0                                           # crisp on Retina, scaled down elsewhere
+    pm = QPixmap(int(size * ratio), int(size * ratio))
+    pm.setDevicePixelRatio(ratio)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 2.2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.drawArc(QRectF(2, 2, size - 4, size - 4), int(-angle * 16), 270 * 16)
+    p.end()
+    ic = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Disabled):
+        ic.addPixmap(pm, mode)
+    return ic
+
+
 class Button(QPushButton):
     """variant: primary | secondary | ghost | danger;  size: sm | md | lg"""
 
@@ -292,6 +330,40 @@ class Button(QPushButton):
     def set_icon(self, name: str) -> None:
         self._icon_name = name
         self.refresh_icon()
+
+    def set_busy(self, busy: bool, text: str = "") -> None:
+        """While its work runs: disabled, a spinning neon arc for an icon, and optionally other text ("Testing…")."""
+        spin = getattr(self, "_spin", None)
+        if busy:
+            if spin is None:
+                self._rest_text = self.text()
+                spin = self._spin = QVariantAnimation(self)
+                spin.setStartValue(0.0)
+                spin.setEndValue(360.0)
+                spin.setDuration(900)
+                spin.setLoopCount(-1)
+                spin.valueChanged.connect(self._spin_frame)
+                if motion.reduced():
+                    self._spin_frame(45.0)                # a still arc: "working", without the motion
+                else:
+                    spin.start()
+            if text:
+                self.setText(text)
+            self.setEnabled(False)
+            return
+        if spin is not None:
+            spin.stop()
+            spin.deleteLater()
+            self._spin = None
+            self.setText(self._rest_text)
+        self.setEnabled(True)
+        self.refresh_icon()
+
+    def busy(self) -> bool:
+        return getattr(self, "_spin", None) is not None
+
+    def _spin_frame(self, angle) -> None:
+        self.setIcon(_spinner_icon(theme.color("primary"), 16, float(angle)))
 
     def setToolTip(self, tip: str) -> None:                  # noqa: N802 - Qt naming
         """An icon-only button is named by its tooltip, so screen readers say "Remove from my vault", not "button"."""
@@ -338,6 +410,19 @@ class NavButton(QPushButton):
     def refresh_icon(self) -> None:
         col = theme.color("primary_on_soft") if self.isChecked() else theme.color("text_muted")
         self.setIcon(icons.icon(self._icon_name, col, 20))
+
+    def keyPressEvent(self, e) -> None:
+        """↑ / ↓ move along the sidebar, as in a native sidebar; Enter or Space opens the page."""
+        if e.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self.parentWidget() is not None:
+            row = sorted((b for b in self.parentWidget().findChildren(NavButton) if b.isVisible()), key=lambda b: b.y())
+            i = row.index(self) + (1 if e.key() == Qt.Key.Key_Down else -1)
+            if 0 <= i < len(row):
+                row[i].setFocus(Qt.FocusReason.TabFocusReason)
+            return
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.click()
+            return
+        super().keyPressEvent(e)
 
     def badge(self) -> int:
         return self._badge
@@ -422,6 +507,11 @@ class Avatar(QWidget):
         self._name = name
         self.update()
 
+    def set_presence(self, kind: Optional[str]) -> None:
+        """A small status dot on the badge, e.g. the relay connection: success / info / warning / danger / neutral."""
+        self._presence = kind
+        self.update()
+
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -437,6 +527,13 @@ class Avatar(QWidget):
         p.setFont(f)
         letters = "".join(w[0] for w in self._name.replace("_", " ").replace(".", " ").replace("-", " ").split()[:2]) or "?"
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, letters.upper())
+        kind = getattr(self, "_presence", None)
+        if kind:
+            d = max(8.0, self._size * 0.3)
+            dot = QRectF(self._size - d, self._size - d, d, d)
+            p.setPen(QPen(theme.qcolor("surface_alt"), 2.0))     # a ring in the card's colour: cut out of the badge
+            p.setBrush(theme.qcolor({"neutral": "text_faint"}.get(kind, kind)))
+            p.drawEllipse(dot.adjusted(1, 1, -1, -1))
 
 
 class ClickablePill(Pill):
@@ -784,6 +881,126 @@ class Stepper(QWidget):
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
 
 
+class NeonBar(QProgressBar):
+    """
+    The progress bar, alive while work goes on: a glint runs along the filled part, and while there is no
+    percentage yet a neon segment slides through. Still when finished, hidden or when motion is reduced.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setDuration(1300)
+        self._anim.setLoopCount(-1)
+        self._anim.valueChanged.connect(self._frame)
+        self.valueChanged.connect(lambda _v: self._run())
+
+    def setRange(self, lo: int, hi: int) -> None:          # noqa: N802 - Qt naming
+        super().setRange(lo, hi)
+        self._run()
+
+    def _busy(self) -> bool:
+        return self.isVisible() and not motion.reduced() and (self.maximum() == 0 or self.value() < self.maximum())
+
+    def _run(self) -> None:
+        if self._busy():
+            if self._anim.state() != QVariantAnimation.State.Running:
+                self._anim.start()
+        else:
+            self._anim.stop()
+            self.update()
+
+    def _frame(self, v) -> None:
+        self._phase = float(v)
+        self.update()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self._run()
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        self._anim.stop()                                 # hidden bars cost nothing
+
+    def paintEvent(self, e) -> None:
+        w, h = self.width(), self.height()
+        track = QPainterPath()
+        track.addRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+        if self.maximum() == 0:                           # no percentage yet: a segment slides through
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.fillPath(track, theme.qcolor("surface_alt"))
+            p.setClipPath(track)
+            seg = w * 0.32
+            x = -seg + (w + seg) * (self._phase if self._busy() else 0.34)
+            neon = QLinearGradient(x, 0, x + seg, 0)
+            neon.setColorAt(0.0, QColor(0, 0, 0, 0))
+            neon.setColorAt(0.35, theme.qcolor("accent"))
+            neon.setColorAt(1.0, theme.qcolor("primary"))
+            p.fillRect(QRectF(x, 0, seg, h), neon)
+            p.end()
+            return
+        super().paintEvent(e)                             # the track and the filled part, from the stylesheet
+        if not self._busy() or self.value() <= self.minimum():
+            return
+        filled = w * (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, filled, h), h / 2, h / 2)
+        p.setClipPath(clip)
+        band = max(36.0, filled * 0.25)
+        x = -band + (filled + band) * self._phase
+        glint = QLinearGradient(x, 0, x + band, 0)
+        glint.setColorAt(0.0, QColor(255, 255, 255, 0))
+        glint.setColorAt(0.5, QColor(255, 255, 255, 110))
+        glint.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.fillRect(QRectF(x, 0, band, h), glint)
+        p.end()
+
+
+class ProgressRing(QWidget):
+    """A small ring that fills as steps get done, "1/3" in the middle: progress at a glance."""
+
+    def __init__(self, size: int = 40, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._done, self._total = 0, 1
+
+    def set(self, done: int, total: int) -> None:
+        self._done, self._total = done, max(1, total)
+        self.setToolTip(f"{done} of {total} done")
+        self.setAccessibleName(f"{done} of {total} done")
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(3, 3, self.width() - 6, self.height() - 6)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(theme.qcolor("border_strong"), 3.5))
+        p.drawEllipse(r)
+        if self._done:
+            neon = QLinearGradient(r.topLeft(), r.bottomRight())        # violet into mint, like the progress bars
+            neon.setColorAt(0.0, theme.qcolor("accent"))
+            neon.setColorAt(1.0, theme.qcolor("primary"))
+            pen = QPen(QBrush(neon), 3.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.drawArc(r, 90 * 16, -round(360 * 16 * min(1.0, self._done / self._total)))
+        f = QFont(self.font())
+        f.setFamily(theme.mono_family())
+        f.setPixelSize(max(9, self.height() // 4))
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(theme.qcolor("text"))
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"{self._done}/{self._total}")
+        p.end()
+
+
 class ProgressPanel(Card):
     """Title, live status text, progress bar and an optional cancel button."""
     cancel_clicked = pyqtSignal()
@@ -798,16 +1015,24 @@ class ProgressPanel(Card):
         top.addWidget(self.title, 1)
         top.addWidget(self.cancel_btn)
         self.body.addLayout(top)
-        self.bar = QProgressBar()
+        self.bar = NeonBar()
         self.bar.setRange(0, 100)
         self.body.addWidget(self.bar)
+        row = QHBoxLayout()
+        row.setSpacing(12)
         self.detail = label("", "muted")
-        self.body.addWidget(self.detail)
+        self.pct = label("", "mono", wrap=False)          # "42%", in the vault's monospace
+        self.pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.detail, 1, Qt.AlignmentFlag.AlignTop)
+        row.addWidget(self.pct, 0, Qt.AlignmentFlag.AlignTop)
+        self.body.addLayout(row)
         self.hide()
 
     def start(self, title: str) -> None:
         self.title.setText(title)
         self.detail.setText("")
+        self.pct.setText("0%")
+        self.pct.show()
         self.bar.setRange(0, 100)
         motion.progress_to(self.bar, 0)
         self.cancel_btn.setEnabled(True)
@@ -815,10 +1040,16 @@ class ProgressPanel(Card):
 
     def update_progress(self, text: str, pct: int) -> None:
         self.detail.setText(text)
-        motion.progress_to(self.bar, max(0, min(100, pct)))
+        pct = max(0, min(100, pct))
+        if self.bar.maximum() == 0:                       # back from "working on it" to a real percentage
+            self.bar.setRange(0, 100)
+        self.pct.setText(f"{pct}%")
+        self.pct.show()
+        motion.progress_to(self.bar, pct)
 
     def indeterminate(self, text: str) -> None:
         self.detail.setText(text)
+        self.pct.hide()                                   # no number to show
         self.bar.setRange(0, 0)
 
     def finish(self) -> None:
@@ -905,10 +1136,23 @@ class ListRow(QWidget):
 
 # ── toasts ───────────────────────────────────────────────────────────────────────────────────────
 class _Toast(QFrame):
-    def __init__(self, text: str, kind: str, parent=None):
+    """
+    One notice. It stays while the pointer is on it (you may be reading it, or about to click it), and a thin line
+    along its bottom edge shows how long it will stay once you move away.
+    """
+
+    def __init__(self, text: str, kind: str, parent=None, ms: int = 5000):
         super().__init__(parent)
         self.setObjectName("Toast")
         self.setProperty("kind", kind)
+        self._color = {"success": "success", "warning": "warning", "error": "danger", "info": "info"}.get(kind, "info")
+        self._total = self._left = max(1, ms)
+        self._fading = False
+        self._clock = QTimer(self)                        # when it goes; the host connects timeout to its fade
+        self._clock.setSingleShot(True)
+        self._tick = QTimer(self)                         # repaints the time-left line
+        self._tick.setInterval(40)
+        self._tick.timeout.connect(self.update)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(10)
@@ -921,10 +1165,62 @@ class _Toast(QFrame):
         msg.setMaximumWidth(340)
         lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignTop)
         lay.addWidget(msg, 1)
+        self.close_btn = QPushButton()                    # dismiss without doing what the notice offers
+        self.close_btn.setObjectName("ToastClose")
+        self.close_btn.setIcon(icons.icon("x", theme.color("text_faint"), 14))
+        self.close_btn.setFixedSize(22, 22)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setToolTip("Dismiss")
+        self.close_btn.setAccessibleName("Dismiss")
+        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_btn.clicked.connect(self._dismiss)
+        lay.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         polish(self)
 
+    def _dismiss(self) -> None:
+        self.on_click = None
+        self.hide()
+        self.deleteLater()
+
     on_click: Optional[Callable[[], None]] = None
+
+    def start(self) -> None:
+        self._clock.start(self._left)
+        if not motion.reduced():
+            self._tick.start()
+
+    def enterEvent(self, e) -> None:
+        if self._clock.isActive():                        # hold it while the pointer is on it
+            self._left = self._clock.remainingTime()
+            self._clock.stop()
+            self._tick.stop()
+            self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        if not self._clock.isActive() and not self._fading:
+            self._left = max(self._left, 1500)            # time to read the end of it
+            self.start()
+        super().leaveEvent(e)
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if motion.reduced():
+            return
+        left = self._clock.remainingTime() if self._clock.isActive() else self._left
+        frac = max(0.0, min(1.0, left / self._total))
+        if frac <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        line = theme.qcolor(self._color)
+        line.setAlphaF(0.6)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line)
+        width = (self.width() - 28) * frac
+        p.drawRoundedRect(QRectF(14, self.height() - 5, width, 2), 1, 1)
+        p.end()
 
     def mousePressEvent(self, _e) -> None:
         action, self.on_click = self.on_click, None
@@ -934,12 +1230,81 @@ class _Toast(QFrame):
             action()
 
 
+class DropOverlay(QWidget):
+    """
+    Covers the window while files are dragged over it and says what dropping them will do. It ignores the mouse
+    entirely, so it can never take a click; the window underneath handles the drop.
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._title = self._detail = ""
+        self._icon, self._kind = "upload", "primary"
+        parent.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parent() and ev.type() == QEvent.Type.Resize:
+            self.setGeometry(self.parentWidget().rect())
+        return False
+
+    def show_for(self, title: str, detail: str, icon: str = "upload", kind: str = "primary") -> None:
+        self._title, self._detail, self._icon, self._kind = title, detail, icon, kind
+        self.setGeometry(self.parentWidget().rect())
+        self.raise_()
+        if not self.isVisible():
+            self.show()
+            motion.fade_in(self, motion.FAST)
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        veil = theme.qcolor("bg")
+        veil.setAlphaF(0.78)
+        p.fillRect(self.rect(), veil)
+        frame = QRectF(self.rect()).adjusted(18, 18, -18, -18)
+        pen = QPen(theme.qcolor("primary"), 2)
+        pen.setDashPattern([5, 4])
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(frame, 22, 22)
+        w = min(560.0, frame.width() - 80)
+        card = QRectF(frame.center().x() - w / 2, frame.center().y() - 105, w, 210)
+        p.setPen(QPen(theme.qcolor("primary_line"), 1))
+        p.setBrush(theme.qcolor("surface"))
+        p.drawRoundedRect(card, 18, 18)                   # the message sits on its own card, clear of the page
+        cx = card.center().x()
+        badge = QRectF(cx - 32, card.top() + 26, 64, 64)
+        fg = {"neutral": "text_muted"}.get(self._kind, self._kind)       # what is being dragged: a PDF, a photo, a key…
+        bg = {"neutral": "surface_alt"}.get(self._kind, f"{self._kind}_soft")
+        p.setBrush(theme.qcolor(bg))
+        p.drawRoundedRect(badge, 20, 20)
+        p.drawPixmap(int(cx - 16), int(badge.center().y() - 16), icons.pixmap(self._icon, theme.color(fg), 32))
+        title = QFont(self.font())
+        title.setFamily(theme.mono_family())
+        title.setPixelSize(22)
+        title.setBold(True)
+        p.setFont(title)
+        p.setPen(theme.qcolor("text"))
+        p.drawText(QRectF(card.left(), card.top() + 104, card.width(), 32), Qt.AlignmentFlag.AlignCenter, self._title)
+        body = QFont(self.font())
+        body.setPixelSize(13)
+        p.setFont(body)
+        p.setPen(theme.qcolor("text_muted"))
+        detail = QFontMetrics(body).elidedText(self._detail, Qt.TextElideMode.ElideMiddle, int(card.width()) - 40)
+        p.drawText(QRectF(card.left(), card.top() + 146, card.width(), 22), Qt.AlignmentFlag.AlignCenter, detail)
+        p.end()
+
+
 class ToastHost(QWidget):
     """
     Overlay in the bottom-right corner of a window. It is sized to fit ONLY the toasts it currently shows and hides
     itself when empty, so it can never cover (and swallow clicks meant for) the buttons underneath.
     """
-    WIDTH = 380
+    WIDTH = 400
+    MAX = 4
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
@@ -982,7 +1347,13 @@ class ToastHost(QWidget):
 
     def show_toast(self, text: str, kind: str = "info", ms: int = 5000,
                    on_click: Optional[Callable[[], None]] = None) -> None:
-        t = _Toast(text, kind, self)
+        shown = self._toasts()
+        while len(shown) >= self.MAX:                     # a burst of news: the oldest make room, the stack stays short
+            old = shown.pop(0)
+            self._lay.removeWidget(old)                   # out of the stack now, not when Qt gets round to deleting it
+            old.hide()
+            old.deleteLater()
+        t = _Toast(text, kind, self, ms)
         t.on_click = on_click
         t.installEventFilter(self)                        # keeps the click mask on the notices as they settle
         t.destroyed.connect(lambda *_: QTimer.singleShot(0, self._fit))
@@ -990,10 +1361,13 @@ class ToastHost(QWidget):
         t.show()
         self._fit()
         motion.fade_in(t, motion.NORMAL)
-        QTimer.singleShot(ms, lambda: self._fade(t))
+        t._clock.timeout.connect(lambda: self._fade(t))  # the toast's own timer: gone with the toast
+        t.start()
 
     def _fade(self, t: QFrame) -> None:
         try:
+            t._fading = True
+            t._tick.stop()
             if motion.reduced():
                 t.hide()
                 t.deleteLater()

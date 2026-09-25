@@ -103,7 +103,7 @@ def main() -> int:
 
     from ui import theme
     from ui.controller import pref
-    theme.apply(app, pref("theme", "dark") if pref("theme", "dark") in ("dark", "light") else "dark")
+    theme.apply(app, pref("theme", "dark") if pref("theme", "dark") in ("dark", "light", "auto") else "dark")
 
     import engine
     if not engine.available():

@@ -193,7 +193,10 @@ class InboxPage(Page):
             li.setData(Qt.ItemDataRole.UserRole, it)
             li.setSizeHint(QSize(0, 62))
             self.inbox_list.addItem(li)
-            self.inbox_list.setItemWidget(li, ListRow(it["from"], f"{human_size(it['size'])} · {time_ago(it['created'])}",
+            left = _days_left(it["expires"]) if it.get("expires") else ""
+            when = f"{human_size(it['size'])} · {time_ago(it['created'])}" + (
+                "" if not left else " · expired" if left == "expired" else f" · {left} left")   # what needs accepting soon
+            self.inbox_list.setItemWidget(li, ListRow(it["from"], when,
                                                       avatar=it["from"], right=[Pill(text, kind)]))
             if it["id"] == keep:
                 self.inbox_list.setCurrentItem(li)
@@ -202,10 +205,25 @@ class InboxPage(Page):
             self.inbox_list.setCurrentRow(0)
         self.inbox_list.setVisible(bool(items))
         self.inbox_empty.setVisible(not items)
-        if not items and self.ctl.operator:
+        if not items:
+            self._update_empty()
+        self._picked()
+
+    def _update_empty(self) -> None:
+        """While still connecting, say so: "empty" would be a guess until the relay has answered."""
+        if not self.ctl.operator:
+            return
+        if self.ctl.relay_state == "connecting":
+            self.inbox_empty.set_art("search")
+            self.inbox_empty.set_text("Checking for files…", "Asking the relay what is waiting for you. It takes a moment.")
+        else:
+            self.inbox_empty.set_art("inbox")
             self.inbox_empty.set_text("Inbox is empty", f"People send you files by your name, {self.ctl.operator}. Share it "
                                                         "with them; a new file appears here within seconds.")
-        self._picked()
+
+    def _relay_state_changed(self, state: str, message: str) -> None:
+        super()._relay_state_changed(state, message)
+        self._update_empty()
 
     def _copy_my_name(self) -> None:
         from PyQt6.QtWidgets import QApplication

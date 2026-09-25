@@ -17,7 +17,7 @@ from ui import art, motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill,
     FitStack, ProgressPanel, Stepper, escape_goes_back, file_icon, friendly_date, human_size, label, on_enter,
-    time_ago,
+    time_ago, esc_clears,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -77,6 +77,7 @@ class SendPage(Page):
         self.file_search = QLineEdit()
         self.file_search.setPlaceholderText("Search your files")
         self.file_search.setClearButtonEnabled(True)
+        esc_clears(self.file_search)
         self.file_search.textChanged.connect(lambda _t: self._fill_files())
         self.file_search.hide()                          # only worth having once the list is long
         l0.addWidget(self.file_search)
@@ -117,6 +118,8 @@ class SendPage(Page):
         l1.addLayout(top)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search by name")
+        self.search.setClearButtonEnabled(True)
+        esc_clears(self.search)
         self.search.textChanged.connect(self._fill_people)
         l1.addWidget(self.search)
         self.people = QListWidget()
@@ -338,13 +341,13 @@ class SendPage(Page):
         self._update_nav()
 
     def _refresh_people(self) -> None:
-        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.set_busy(True, "Looking up…")
         self.people_msg.setText("Looking people up…")
         self.ctl.run_job(self.ctl.make_directory_job(), on_success=self._refreshed,
                          on_fail=lambda m: self._refreshed(None, m))
 
     def _refreshed(self, result, error: str = "") -> None:
-        self.refresh_btn.setEnabled(True)
+        self.refresh_btn.set_busy(False)
         self.people_msg.setText(error if error else "")
         self.ctl.contacts_changed.emit()
 

@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QMainWindow, QMenu, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout,
-    QWidget,
+    QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow, QMenu, QPushButton, QStackedWidget, QSystemTrayIcon,
+    QVBoxLayout, QWidget,
 )
 
 import engine
+import relay_config
 from ui import icons, motion, theme
 from ui.controller import AppController, pref, set_pref
 from ui.pages.auth import AuthPage
@@ -22,7 +25,9 @@ from ui.pages.inbox import InboxPage
 from ui.pages.send import SendPage
 from ui.pages.settings import SettingsPage
 from ui.pages.vault import VaultPage
-from ui.widgets import Avatar, Banner, Button, ClickablePill, IconBadge, NavButton, Pill, ToastHost, label
+from ui.widgets import (
+    Avatar, Banner, Button, ClickablePill, DropOverlay, IconBadge, NavButton, Pill, ToastHost, file_icon, label,
+)
 
 logger = logging.getLogger(__name__)
 APP_VERSION = "1.0"
@@ -129,6 +134,7 @@ class MainWindow(QMainWindow):
         self._wire()
 
         self.toasts = ToastHost(root)
+        self._drop_overlay = DropOverlay(root)          # "Drop to protect …" while files are dragged over the window
         self._tray = self._make_tray()
         self._idle = QTimer(self)
         self._idle.setSingleShot(True)
@@ -145,6 +151,7 @@ class MainWindow(QMainWindow):
         self._really_quit = False
         self._install_commands()
         QApplication.instance().applicationStateChanged.connect(self._app_state_changed)
+        QApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)   # "Automatic" theme
 
         if self.ctl.operator:                       # attached to a session that is already running: adopt its state
             self._session_started(self.ctl.operator)
@@ -206,8 +213,9 @@ class MainWindow(QMainWindow):
         lay.setSpacing(10)
         self.relay_pill = ClickablePill("Not connected", "neutral")
         self.storage_pill = ClickablePill("", "neutral")
-        for pill in (self.relay_pill, self.storage_pill):          # a status you can see is a status you can fix
-            pill.clicked.connect(lambda: self.root_stack.currentIndex() == 1 and self.go("settings"))
+        # a status you can see is a status you can fix: each pill opens Settings at its own section
+        self.relay_pill.clicked.connect(lambda: self._open_settings_at("relay_card"))
+        self.storage_pill.clicked.connect(lambda: self._open_settings_at("storage_card"))
         self.engine_banner_pill = Pill("", "danger")
         self.engine_banner_pill.hide()
         self.work_pill = ClickablePill("", "info")           # "Sending to sam… 42%" while you are elsewhere
@@ -227,21 +235,37 @@ class MainWindow(QMainWindow):
             return None
         tray = QSystemTrayIcon(icons.app_icon(), self)
         tray.setToolTip("A.N.Sx Vault")
-        menu = QMenu(self)
-        menu.addAction("Open A.N.Sx Vault", self.bring_to_front)
-        self._tray_lock = menu.addAction("Lock now", self._lock)
-        menu.addSeparator()
-        menu.addAction("Quit", self.quit_app)             # goes through the "transfer still running?" check
-        menu.aboutToShow.connect(self._tray_menu_opening)
-        tray.setContextMenu(menu)
-        self._tray_menu = menu
+        tray.setContextMenu(self._build_tray_menu())
         tray.activated.connect(self._tray_clicked)
         tray.messageClicked.connect(self.bring_to_front)      # "New file from sam" clicked
         tray.show()
         return tray
 
+    def _build_tray_menu(self) -> QMenu:
+        """The menu-bar / tray menu: in the background it is the whole app, so it says what is going on."""
+        menu = QMenu(self)
+        self._tray_status = menu.addAction("")            # "● Online" / "Locked": a status line, not a command
+        self._tray_status.setEnabled(False)
+        self._tray_inbox = menu.addAction("", lambda: (self.bring_to_front(), self.go("inbox")))
+        menu.addSeparator()
+        menu.addAction("Open A.N.Sx Vault", self.bring_to_front)
+        self._tray_lock = menu.addAction("Lock now", self._lock)
+        menu.addSeparator()
+        menu.addAction("Quit", self.quit_app)             # goes through the "transfer still running?" check
+        menu.aboutToShow.connect(self._tray_menu_opening)
+        self._tray_menu = menu
+        self._tray_menu_opening()
+        return menu
+
     def _tray_menu_opening(self) -> None:
-        self._tray_lock.setEnabled(self.root_stack.currentIndex() == 1)
+        signed_in = self.root_stack.currentIndex() == 1
+        self._tray_lock.setEnabled(signed_in)
+        state = {"online": "● Online", "connecting": "● Connecting…", "offline": "● Offline",
+                 "conflict": "● Name conflict on the relay"}.get(self.ctl.relay_state, "Not connected")
+        self._tray_status.setText(f"{self.ctl.operator} · {state}" if signed_in and self.ctl.operator else "Locked")
+        n = len(self.ctl.inbox) if signed_in else 0
+        self._tray_inbox.setText(f"Open Inbox — {n} file{'s' if n != 1 else ''} waiting")
+        self._tray_inbox.setVisible(n > 0)
 
     def _tray_clicked(self, reason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -260,11 +284,14 @@ class MainWindow(QMainWindow):
         """(menu, label, shortcut, handler). Each shortcut is registered exactly once: a key bound twice does nothing."""
         cmds = [("File", "Protect a File…", "Ctrl+O", self._protect_shortcut),
                 ("File", "Open a Package File…", "", self._open_package_command),
-                ("File", "Lock", "Ctrl+L", self._lock)]
+                ("File", "Lock", "Ctrl+L", self._lock),
+                ("File", "Close Window", "Ctrl+W", self.close),     # hides to the menu bar if it runs in the background
+                ("Edit", "Find…", "Ctrl+F", self._find),
+                ("File", "Settings…", "Ctrl+,", lambda _c=False: self._shortcut("settings"))]
         for i, (key, text, _icon) in enumerate(NAV, start=1):
             cmds.append(("Go", text, f"Ctrl+{i}", lambda _c=False, k=key: self._shortcut(k)))
         cmds.append(("File", "Quit A.N.Sx Vault", "Ctrl+Q", self.quit_app))
-        cmds += [("Help", "Keyboard Shortcuts", "", self._show_shortcuts),
+        cmds += [("Help", "Keyboard Shortcuts", "Ctrl+/", self._show_shortcuts),
                  ("Help", "Save a Support Report…", "", self._support_report),
                  ("Help", "About A.N.Sx Vault", "", self._about)]
         return cmds
@@ -287,12 +314,39 @@ class MainWindow(QMainWindow):
                     act.setMenuRole(act.MenuRole.AboutRole)   # macOS moves it into the app menu
                 elif label_text.startswith("Quit"):
                     act.setMenuRole(act.MenuRole.QuitRole)    # replaces the default ⌘Q, so it really quits
+                elif label_text == "Settings…":
+                    act.setMenuRole(act.MenuRole.PreferencesRole)   # macOS: in the app menu, where ⌘, lives
                 act.triggered.connect(fn)
             self._menus = menus
         else:                                             # Windows / Linux: keep the window free of a menu bar
             for _menu, _label, keys, fn in self._commands():
                 if keys:
                     QShortcut(QKeySequence(keys), self, activated=fn)
+
+    def _find(self) -> None:
+        """⌘F: this page's search box; on a page without one, the search in your protected files."""
+        if self.root_stack.currentIndex() != 1:
+            return
+        page = self.content.currentWidget()
+        boxes = [b for b in (getattr(page, n, None) for n in ("search", "file_search", "filter")) if isinstance(b, QLineEdit)]
+        if not boxes:
+            self.go("vault")
+            page = self.pages["vault"]
+            boxes = [page.filter]
+        shown = [b for b in boxes if b.isVisible()]
+        if shown:                                         # e.g. none on Send's review step: stay put
+            page.ensureWidgetVisible(shown[0])
+            shown[0].setFocus(Qt.FocusReason.ShortcutFocusReason)
+            shown[0].selectAll()
+
+    def _open_settings_at(self, card: str) -> None:
+        if self.root_stack.currentIndex() != 1:
+            return
+        self.go("settings")
+        page = self.pages["settings"]
+        section = getattr(page, card)
+        page.ensureWidgetVisible(section, 0, 24)
+        motion.flash(section, theme.color("primary_soft"))  # "it's this one"
 
     def _open_package_command(self) -> None:
         if self.root_stack.currentIndex() == 1:
@@ -366,15 +420,43 @@ class MainWindow(QMainWindow):
             return []
         return [u.toLocalFile() for u in mime.urls() if u.isLocalFile() and os.path.isfile(u.toLocalFile())]
 
+    @staticmethod
+    def _all_id_files(paths: list) -> bool:
+        return all(p.lower().endswith(".ansx_id") for p in paths)
+
+    def _drop_message(self, paths: list) -> tuple[str, str, str, str]:
+        """What dropping these files will do, in the words of what dropEvent then does: title, detail, icon, kind."""
+        name = os.path.basename(paths[0])
+        if self._all_id_files(paths):
+            return ("Drop to add a person" if len(paths) == 1 else f"Drop to add {len(paths)} people",
+                    f"“{name}” goes into People & keys, marked verified: you got it from them directly.", "key", "primary")
+        look = file_icon(name) if len(paths) == 1 else ("upload", "primary")
+        if self.content.currentWidget() is self.pages["send"] and len(paths) == 1:
+            return ("Drop to protect and send", f"“{name}” is encrypted first, then you choose who gets it.") + look
+        if len(paths) == 1:
+            return ("Drop to protect", f"“{name}” is encrypted and split into 12 pieces; any 8 rebuild it.") + look
+        return (f"Drop to protect {len(paths)} files", "They are encrypted one after another.") + look
+
     def dragEnterEvent(self, e) -> None:
-        if self._dropped_files(e.mimeData()):
+        paths = self._dropped_files(e.mimeData())
+        if paths:
             e.acceptProposedAction()
+            self._drop_overlay.show_for(*self._drop_message(paths))
+
+    def dragLeaveEvent(self, e) -> None:
+        self._drop_overlay.hide()
 
     def dropEvent(self, e) -> None:
+        self._drop_overlay.hide()
         paths = self._dropped_files(e.mimeData())
         if not paths:
             return
         e.acceptProposedAction()
+        if self._all_id_files(paths):                     # ID files add people; they are not files to protect
+            self.go("contacts")
+            for p in paths:
+                self.pages["contacts"].import_path(p)
+            return
         send = self.pages["send"]
         if self.content.currentWidget() is send and len(paths) == 1:   # on Send: protect it and carry on sending
             if send._job is not None:
@@ -488,6 +570,7 @@ class MainWindow(QMainWindow):
         self.auth.show_login()
 
     def _session_started(self, name: str) -> None:
+        set_pref("last_operator", name)                   # pre-selected on the sign-in screen next time
         self.chip_name.setText(name)
         self.chip_avatar.set_name(name)
         self.root_stack.setCurrentIndex(1)
@@ -553,8 +636,14 @@ class MainWindow(QMainWindow):
                       "offline": ("Offline", "warning"), "conflict": ("Name conflict", "danger"),
                       "idle": ("Not connected", "neutral")}.get(state, (state, "neutral"))
         self.relay_pill.set(f"● {text}" if state != "idle" else text, kind)
-        self.relay_pill.setToolTip(f"{message}\nClick to open connection settings." if message
-                                   else "Click to open connection settings.")
+        if state != getattr(self, "_relay_shown", None):
+            self._relay_shown, self._relay_since = state, time.strftime("%H:%M")
+        host = urlparse(relay_config.get_relay_url()).hostname or "the relay"
+        where = {"online": f"Connected to {host} since {self._relay_since}.",
+                 "connecting": f"Connecting to {host}…", "idle": "Not connected (locked)."}.get(state, f"{message} ({host})")
+        self.relay_pill.setToolTip(f"{where}\nClick to open connection settings.")
+        self.chip_avatar.set_presence(kind)                  # the same status as a dot on your badge in the sidebar
+        self.chip_avatar.setToolTip(where)
         motion.breathe(self.relay_pill, state == "connecting")
 
     def _storage_pill(self) -> None:
@@ -578,9 +667,16 @@ class MainWindow(QMainWindow):
 
     # ── theme ────────────────────────────────────────────────────────────────
     def set_theme(self, name: str) -> None:
-        theme.apply(QApplication.instance(), name)
-        set_pref("theme", name)
-        self.retheme()
+        def change() -> None:
+            theme.apply(QApplication.instance(), name)
+            set_pref("theme", name)
+            self.retheme()
+        motion.crossfade(self.centralWidget(), change)   # one smooth step instead of a flash of new colours
+
+    def _system_scheme_changed(self, *_args) -> None:
+        """The computer switched between light and dark: follow it if the theme is set to Automatic."""
+        if theme.choice() == "auto" and (theme._system_scheme() or "dark") != theme.current():
+            self.set_theme("auto")
 
     def retheme(self) -> None:
         for cls in (IconBadge,):

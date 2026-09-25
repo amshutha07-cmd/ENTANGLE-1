@@ -6,7 +6,7 @@ import time
 import pytest
 
 pytest.importorskip("PyQt6")
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from security_core import SecurityCore, VaultLedger  # noqa: E402
 from ui.controller import AppController, set_pref  # noqa: E402
@@ -463,7 +463,7 @@ def test_home_tiles_show_live_status(signed_in):
     hp.refresh()
     assert "protected" in hp.card_protect.text.text()
     assert hp.card_send.text.text().startswith("Last: one.pdf to sam")
-    assert hp.card_inbox.text.text() == "1 file waiting for you to accept."
+    assert hp.card_inbox.text.text() == "1 file from alex, waiting for you to accept."
 
 
 def _entry_with_cloud(n=7):
@@ -606,3 +606,375 @@ def test_cancel_stops_the_rest_of_the_batch(signed_in, monkeypatch):
     sp._batch_done = [("one.pdf", "amy_b")]
     sp._batch_cancelled()
     assert sp._batch == [] and sp.review.isVisible()
+
+
+def test_dragging_files_over_the_window_says_what_dropping_them_does(tmp_path):
+    from PyQt6.QtCore import QMimeData, QPoint, Qt, QUrl
+    from PyQt6.QtGui import QDragEnterEvent, QDragLeaveEvent
+    win = MainWindow(AppController())
+    win.resize(1200, 800)
+    win.show()
+    files = []
+    for name in ("Q3 board deck.pdf", "notes.txt"):
+        f = tmp_path / name
+        f.write_bytes(b"x")
+        files.append(str(f))
+
+    def drag(paths):
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        win._mime = mime                                          # the event keeps only a pointer to it
+        win.dragEnterEvent(QDragEnterEvent(QPoint(300, 300), Qt.DropAction.CopyAction, mime,
+                                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        return win._drop_overlay
+
+    win.root_stack.setCurrentIndex(0)                             # signed out: files are not taken, nothing shows
+    assert not drag(files[:1]).isVisible()
+    win.root_stack.setCurrentIndex(1)
+    win.go("home")
+    o = drag(files[:1])
+    assert o.isVisible() and o._title == "Drop to protect" and "Q3 board deck.pdf" in o._detail
+    assert o.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)     # can never take a click
+    assert drag(files)._title == "Drop to protect 2 files"
+    win.go("send")
+    assert drag(files[:1])._title == "Drop to protect and send"
+    win.dragLeaveEvent(QDragLeaveEvent())                         # dragged away again
+    assert not o.isVisible()
+    win.close()
+
+
+def test_your_badge_in_the_sidebar_shows_the_connection_and_its_tooltip_says_where():
+    from urllib.parse import urlparse
+    import relay_config
+    win = MainWindow(AppController())
+    win.show()
+    win._relay_state("online", "Connected")
+    assert win.chip_avatar._presence == "success"
+    host = urlparse(relay_config.get_relay_url()).hostname
+    assert f"Connected to {host} since " in win.relay_pill.toolTip()
+    since = win._relay_since
+    win._relay_state("online", "Connected")                          # still online: "since" does not move
+    assert win._relay_since == since
+    win._relay_state("connecting", "Connecting to the relay…")
+    assert win.chip_avatar._presence == "info" and "Connecting to" in win.chip_avatar.toolTip()
+    assert not win.chip_avatar.grab().isNull()                        # the dot paints
+    win.close()
+
+
+def test_find_goes_to_the_search_box_on_this_page_or_to_your_files(signed_in):
+    _ctl, win = signed_in
+    SecurityCore.pin_discovered_contact("find_me", SecurityCore.load_identity_for_user("ux_user")["public_key"], "relay")
+    win.go("contacts")
+    pump()
+    win._find()
+    assert win.focusWidget() is win.pages["contacts"].search
+    win.go("home")                                                 # no search here: your files' search instead
+    win._find()
+    assert win.content.currentWidget() is win.pages["vault"]
+
+
+def test_home_shows_your_key_like_an_address_and_a_click_copies_all_of_it(signed_in):
+    ctl, win = signed_in
+    win.go("home")
+    pump()
+    chip, fp = win.pages["home"].key_chip, ctl.my_fingerprint()
+    assert chip.isVisible() and chip.text() == f"{fp.split()[0]} … {fp.split()[-1]}"
+    chip.click()
+    assert QApplication.clipboard().text() == fp and chip.text() == "Copied"
+
+
+def test_a_notice_stays_while_the_pointer_is_on_it():
+    from PyQt6.QtCore import QEvent, QPointF
+    from PyQt6.QtGui import QEnterEvent
+    from PyQt6.QtWidgets import QWidget
+    from ui.widgets import ToastHost
+    root = QWidget()
+    root.resize(900, 700)
+    host = ToastHost(root)
+    root.show()
+    host.show_toast("Read me slowly", "info", ms=200)
+    t = host._toasts()[0]
+    QApplication.sendEvent(t, QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
+    assert not t._clock.isActive()
+    time.sleep(0.3)
+    QApplication.processEvents()
+    assert host._toasts() == [t]                                     # still there, well past its 200 ms
+    QApplication.sendEvent(t, QEvent(QEvent.Type.Leave))
+    assert t._clock.isActive() and t._clock.remainingTime() >= 1400   # then time to read the end of it
+    root.close()
+
+
+def test_recent_activity_leads_to_where_it_happened(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    import activity
+    from ui.pages.home import _ActivityRow
+    _ctl, win = signed_in
+    activity.add("sent", "Sent deck.pdf to sam", operator="ux_user")
+    win.go("home")
+    pump()
+    rows = [r for r in win.pages["home"].findChildren(_ActivityRow) if r.isVisible()]
+    assert rows and rows[0].toolTip() == "See what you sent"
+    QTest.mouseClick(rows[0], Qt.MouseButton.LeftButton)
+    assert win.content.currentWidget() is win.pages["inbox"]          # the Sent tab of the inbox
+
+
+def test_a_status_pill_opens_settings_at_its_own_section(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    _ctl, win = signed_in
+    win.resize(1000, 700)                                            # small enough that the section is further down
+    win.go("home")
+    QTest.mouseClick(win.storage_pill, Qt.MouseButton.LeftButton)
+    page = win.pages["settings"]
+    assert win.content.currentWidget() is page
+    top = page.storage_card.mapTo(page.viewport(), page.storage_card.rect().topLeft()).y()
+    assert 0 <= top < page.viewport().height()                       # scrolled into view
+
+
+def test_the_inbox_says_it_is_checking_until_the_relay_has_answered(signed_in):
+    ctl, win = signed_in
+    win.go("inbox")
+    page = win.pages["inbox"]
+    ctl._set_relay_state("connecting", "Connecting to the relay…")
+    assert page.inbox_empty._title.text() == "Checking for files…"
+    ctl._set_relay_state("online", "Connected")
+    assert page.inbox_empty._title.text() == "Inbox is empty"
+
+
+def test_sign_in_preselects_whoever_unlocked_last(signed_in):
+    from ui.controller import pref
+    _ctl, win = signed_in
+    assert pref("last_operator") == "ux_user"                        # remembered when the session started
+    if "ux_second" not in SecurityCore.list_registered_users():
+        SecurityCore.establish_identity("ux_second", "another long passphrase for ux", auth="passphrase")
+    login = win.auth.login
+    for name in ("ux_second", "ux_user"):
+        set_pref("last_operator", name)
+        login.refresh()
+        assert login._selected == name
+
+
+def test_the_menu_bar_menu_says_what_is_going_on(signed_in):
+    ctl, win = signed_in
+    win._build_tray_menu()
+    ctl.inbox = [{"id": "t1", "from": "sam"}, {"id": "t2", "from": "alex"}]
+    ctl._set_relay_state("online", "Connected")
+    win._tray_menu_opening()
+    assert win._tray_status.text() == "ux_user · ● Online" and not win._tray_status.isEnabled()
+    assert win._tray_inbox.isVisible() and win._tray_inbox.text() == "Open Inbox — 2 files waiting"
+    win.root_stack.setCurrentIndex(0)                                # locked: nothing about the inbox shows
+    win._tray_menu_opening()
+    assert win._tray_status.text() == "Locked" and not win._tray_inbox.isVisible()
+    ctl.inbox = []
+
+
+def test_protected_files_can_be_ordered_and_the_choice_is_remembered(signed_in):
+    from ui.controller import pref
+    from ui.pages.vault import VaultRow
+    _ctl, win = signed_in
+    mine = [("srt-b.txt", 50, "2026-09-20"), ("srt-a.txt", 5, "2026-09-21"), ("srt-c.txt", 1, "2026-09-22")]
+    for name, size, day in mine + [(f"srt-x{n}.bin", 2, "2026-09-19") for n in range(5)]:
+        VaultLedger.add_entry(name, f"/x/{name}.png", f"{day} 10:00:00", size=size, storage={}, owner="ux_user")
+    page = win.pages["vault"]
+    win.go("vault")
+    pump()
+
+    def shown():                                                     # the order of this test's own files
+        pump()
+        names = {e["id"]: e["original_filename"] for e in VaultLedger.load(owner="ux_user")}
+        return [n for n in (names[r.entry_id] for r in page.findChildren(VaultRow) if r.isVisible())
+                if n in ("srt-a.txt", "srt-b.txt", "srt-c.txt")]
+    assert page.sort.isVisible()
+    page.sort.setCurrentIndex(page.sort.findData("name"))
+    assert shown() == ["srt-a.txt", "srt-b.txt", "srt-c.txt"] and pref("vault_sort") == "name"
+    page.sort.setCurrentIndex(page.sort.findData("size"))
+    assert shown() == ["srt-b.txt", "srt-a.txt", "srt-c.txt"]
+    page.sort.setCurrentIndex(page.sort.findData("newest"))
+    assert shown() == ["srt-c.txt", "srt-a.txt", "srt-b.txt"]
+
+
+def test_the_inbox_tile_says_who_the_files_are_from():
+    from ui.pages.home import _names
+    assert _names(["sam"]) == "sam" and _names(["alex", "sam"]) == "alex and sam"
+    assert _names(["a", "b", "c"]) == "a, b and 1 other" and _names(["a", "b", "c", "d"]) == "a, b and 2 others"
+
+
+def test_a_burst_of_notices_keeps_the_stack_short():
+    from PyQt6.QtWidgets import QWidget
+    from ui.widgets import ToastHost
+    root = QWidget()
+    root.resize(900, 700)
+    host = ToastHost(root)
+    root.show()
+    for i in range(7):
+        host.show_toast(f"Notice {i}", "info")
+    pump()
+    assert len(host._toasts()) == ToastHost.MAX                     # the newest four
+    root.close()
+
+
+def test_switching_the_theme_is_one_smooth_step(monkeypatch):
+    from PyQt6.QtCore import QCoreApplication, QEvent, Qt
+    from PyQt6.QtWidgets import QLabel
+    from ui import motion, theme
+    monkeypatch.delenv("ANSX_REDUCE_MOTION", raising=False)
+    monkeypatch.setattr(motion, "_system", False)
+    motion.set_reduced(False)
+    win = MainWindow(AppController())
+    win.show()
+    root = win.centralWidget()
+
+    def veils():
+        return [c for c in root.children() if isinstance(c, QLabel) and c.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)]
+    win.set_theme("light")
+    assert theme.current() == "light" and len(veils()) == 1           # the old look, fading over the new one
+    pump(0.6)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not veils()                                                # and then gone
+    win.set_theme("dark")
+    win.close()
+
+
+def test_esc_empties_a_search_box(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    _ctl, win = signed_in
+    box = win.pages["contacts"].search
+    box.setText("sam")
+    QTest.keyClick(box, Qt.Key.Key_Escape)
+    assert box.text() == ""
+
+
+def test_the_automatic_theme_follows_the_computer(monkeypatch):
+    from ui import theme
+    win = MainWindow(AppController())
+    win.show()
+    monkeypatch.setattr(theme, "_system_scheme", lambda: "light")
+    win.set_theme("auto")
+    assert theme.choice() == "auto" and theme.current() == "light"
+    monkeypatch.setattr(theme, "_system_scheme", lambda: "dark")
+    win._system_scheme_changed()                                     # the computer switched, e.g. at sunset
+    assert theme.choice() == "auto" and theme.current() == "dark"
+    page = win.pages["settings"]
+    page.on_show()
+    assert page.theme_combo.currentData() == "auto"
+    win.set_theme("dark")
+    win.close()
+
+
+def test_progress_shows_a_percentage_when_there_is_one():
+    from ui.widgets import ProgressPanel
+    p = ProgressPanel()
+    p.start("Protecting deck.pdf")
+    p.update_progress("Storing pieces…", 42)
+    assert p.pct.text() == "42%" and not p.pct.isHidden()
+    p.indeterminate("Checking…")
+    assert p.pct.isHidden()                                          # no number to show
+    p.update_progress("Storing pieces…", 60)
+    assert p.pct.text() == "60%" and p.bar.maximum() == 100
+
+
+def test_dropping_an_id_file_adds_the_person_instead_of_protecting_it(signed_in, tmp_path, monkeypatch):
+    from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+    from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+    import ui.pages.contacts as cp
+    monkeypatch.setattr(cp, "info", lambda *a, **k: None)             # no modal "Contact added" in a test
+    ctl, win = signed_in
+    if "ux_friend" not in SecurityCore.list_registered_users():
+        SecurityCore.establish_identity("ux_friend", "a long passphrase for a friend", auth="passphrase")
+    path = SecurityCore.export_public_identity("ux_friend", str(tmp_path))
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(path)])
+    win.dragEnterEvent(QDragEnterEvent(QPoint(200, 200), Qt.DropAction.CopyAction, mime,
+                                       Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    assert win._drop_overlay._title == "Drop to add a person"
+    win.dropEvent(QDropEvent(QPointF(200, 200), Qt.DropAction.CopyAction, mime,
+                             Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    assert win.content.currentWidget() is win.pages["contacts"]
+    assert "ux_friend" in [c["operator"] for c in ctl.contacts()]
+
+
+def test_a_persons_details_say_when_you_last_sent_them_a_file(signed_in):
+    ctl, win = signed_in
+    SecurityCore.pin_discovered_contact("sam_contact", SecurityCore.load_identity_for_user("ux_user")["public_key"], "relay")
+    ctl.outbox = [{"id": "s1", "to": "sam_contact", "size": 1, "created": int(time.time()) - 7200, "state": "delivered"}]
+    win.go("contacts")
+    page = win.pages["contacts"]
+    page.select("sam_contact")
+    assert page.d_src.text() == "Found on the relay · you last sent them a file 2 h ago"
+    ctl.outbox = []
+
+
+def test_a_notice_can_be_dismissed_without_doing_what_it_offers():
+    from PyQt6.QtCore import QCoreApplication, QEvent, Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QWidget
+    from ui.widgets import ToastHost
+    root = QWidget()
+    root.resize(900, 700)
+    host = ToastHost(root)
+    root.show()
+    opened = []
+    host.show_toast("New file from sam. Click here to open your inbox.", "info", on_click=lambda: opened.append(True))
+    t = host._toasts()[0]
+    QTest.mouseClick(t.close_btn, Qt.MouseButton.LeftButton)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not opened and not host._toasts()
+    root.close()
+
+
+def test_arrow_keys_move_along_the_sidebar(signed_in):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    _ctl, win = signed_in
+    win.nav["home"].setFocus()
+    QTest.keyClick(win.nav["home"], Qt.Key.Key_Down)
+    assert win.focusWidget() is win.nav["vault"]
+    QTest.keyClick(win.nav["vault"], Qt.Key.Key_Return)                  # Enter opens it
+    assert win.content.currentWidget() is win.pages["vault"]
+    QTest.keyClick(win.nav["vault"], Qt.Key.Key_Up)
+    assert win.focusWidget() is win.nav["home"]
+
+
+def test_the_inbox_list_says_how_long_each_file_stays(signed_in):
+    from ui.widgets import ListRow
+    ctl, win = signed_in
+    now = int(time.time())
+    ctl.inbox = [{"id": "i9", "from": "alex", "size": 2048, "created": now, "expires": now + 6 * 86400 + 60}]
+    win.go("inbox")
+    page = win.pages["inbox"]
+    page._fill_inbox()
+    texts = [w.text() for r in page.inbox_list.findChildren(ListRow) for w in r.findChildren(QLabel)]
+    assert any(t.endswith("· 6 days left") for t in texts)
+    ctl.inbox = []
+
+
+def test_progress_bars_move_only_while_there_is_work(monkeypatch):
+    from ui import motion
+    from ui.widgets import NeonBar
+    monkeypatch.delenv("ANSX_REDUCE_MOTION", raising=False)
+    monkeypatch.setattr(motion, "_system", False)
+    motion.set_reduced(False)
+    bar = NeonBar()
+    bar.setRange(0, 100)
+    bar.show()
+    bar.setValue(40)
+    running = bar._anim.State.Running
+    assert bar._anim.state() == running                              # a glint runs along it
+    bar.setValue(100)
+    assert bar._anim.state() != running                              # done: still
+    bar.setRange(0, 0)
+    assert bar._anim.state() == running                              # no percentage yet: a segment slides
+    assert not bar.grab().isNull()
+    bar.hide()
+    assert bar._anim.state() != running                              # hidden bars cost nothing
+
+
+def test_a_busy_button_spins_and_comes_back_as_it_was():
+    from ui.widgets import Button
+    b = Button("Test", "secondary", "wifi")
+    b.set_busy(True, "Testing…")
+    assert b.busy() and not b.isEnabled() and b.text() == "Testing…"
+    b.set_busy(False)
+    assert not b.busy() and b.isEnabled() and b.text() == "Test"

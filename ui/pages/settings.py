@@ -1,8 +1,9 @@
 """ui/pages/settings.py — connection, cloud storage, appearance and security details."""
 from __future__ import annotations
 
+import time
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 import engine
@@ -71,7 +72,7 @@ class SettingsPage(Page):
         self.root.addWidget(acct)
 
         # ── relay ──
-        rel = Card(padding=20, spacing=10)
+        rel = self.relay_card = Card(padding=20, spacing=10)
         rel.body.addWidget(label("Connection", "h2", wrap=False))
         rel.body.addWidget(label("The relay is the mailbox that carries your encrypted files between people. "
                                  "It can never read them. Use the address your administrator gave you.", "muted"))
@@ -93,7 +94,7 @@ class SettingsPage(Page):
         self.root.addWidget(rel)
 
         # ── storage ──
-        sto = Card(padding=20, spacing=10)
+        sto = self.storage_card = Card(padding=20, spacing=10)
         head = QHBoxLayout()
         head.addWidget(label("Cloud storage", "h2", wrap=False), 1)
         add = Button("Add an account", "primary", "plus", "sm")
@@ -117,6 +118,9 @@ class SettingsPage(Page):
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("Dark", "dark")
         self.theme_combo.addItem("Light", "light")
+        self.theme_combo.addItem("Automatic", "auto")
+        self.theme_combo.setItemData(2, "Follows your computer's light or dark appearance, and changes with it.",
+                                     Qt.ItemDataRole.ToolTipRole)
         self.theme_combo.currentIndexChanged.connect(self._theme_picked)
         r.addWidget(self.theme_combo)
         app.body.addLayout(r)
@@ -162,6 +166,8 @@ class SettingsPage(Page):
                           ("Inbox, People, Settings", f"{native('Ctrl+4')}  {native('Ctrl+5')}  {native('Ctrl+6')}"),
                           ("Protect a file", native("Ctrl+O")),
                           ("Lock now", native("Ctrl+L")),
+                          ("Search on this page", native("Ctrl+F")),
+                          ("This list of shortcuts", native("Ctrl+/")),
                           ("Move between buttons", "Tab  /  Shift+Tab")):
             kv = KeyValue(what, seq, key_width=190)
             keys.body.addWidget(kv)
@@ -208,7 +214,7 @@ class SettingsPage(Page):
         self.acct_name.set(name or "—")
         self.acct_mode.set("NFC card" if ctl.auth_mode(name) == "nfc" else "Passphrase")
         self.relay_edit.setText(relay_config.get_relay_url())
-        self.theme_combo.setCurrentIndex(0 if theme.current() == "dark" else 1)
+        self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(theme.choice())))
         mins = int(pref("auto_lock_minutes", 10) or 0)
         idx = max(0, self.lock_combo.findData(mins))
         self.lock_combo.setCurrentIndex(idx)
@@ -231,21 +237,25 @@ class SettingsPage(Page):
     def _test_relay(self) -> None:
         self.relay_msg.set("Testing…", "info")
         self.relay_msg.show()
-        self.relay_test.setEnabled(False)
+        self.relay_test.set_busy(True, "Testing…")
+        self._test_started = time.monotonic()
         job = self.ctl.make_relay_test_job(self.relay_edit.text())
         self.ctl.run_job(job, on_success=self._relay_ok, on_fail=self._relay_bad)
 
     def _relay_ok(self, res: dict) -> None:
-        self.relay_test.setEnabled(True)
+        self.relay_test.set_busy(False)
         mb = res["limits"]["max_transfer_bytes"] // (1024 * 1024)
+        took = f" in {max(1, round((time.monotonic() - getattr(self, '_test_started', time.monotonic())) * 1000))} ms"
         if res["secure"]:
-            self.relay_msg.set(f"Connected. Files up to {mb} MB, kept up to {res['limits']['ttl_seconds'] // 86400} days.", "success")
+            self.relay_msg.set(f"Connected{took}. Files up to {mb} MB, kept up to {res['limits']['ttl_seconds'] // 86400} "
+                               "days.", "success")
         else:
-            self.relay_msg.set("Connected, but this address is not encrypted (http). Your files stay end-to-end encrypted, "
-                               "but who you talk to and when is visible on the network. Use https:// for real use.", "warning")
+            self.relay_msg.set(f"Connected{took}, but this address is not encrypted (http). Your files stay end-to-end "
+                               "encrypted, but who you talk to and when is visible on the network. Use https:// for real "
+                               "use.", "warning")
 
     def _relay_bad(self, message: str) -> None:
-        self.relay_test.setEnabled(True)
+        self.relay_test.set_busy(False)
         self.relay_msg.set(message, "danger")
         self.relay_msg.show()
 

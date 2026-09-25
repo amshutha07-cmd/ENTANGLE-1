@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QL
 from ui.dialogs import confirm, info, verify_fingerprint
 from ui.pages.base import Page
 from ui.widgets import (
-    Avatar, Banner, Button, Card, EmptyState, Fingerprint, ListRow, Pill, label,
+    Avatar, Banner, Button, Card, EmptyState, Fingerprint, ListRow, Pill, label, esc_clears, time_ago,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -46,8 +46,9 @@ class ContactsPage(Page):
 
         # contacts master/detail
         bar = QHBoxLayout()
-        bar.addWidget(label("PEOPLE YOU CAN SEND TO", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
-        refresh = Button("Refresh from relay", "secondary", "refresh", "sm")
+        self.list_title = label("PEOPLE YOU CAN SEND TO", "eyebrow", wrap=False)
+        bar.addWidget(self.list_title, 1, Qt.AlignmentFlag.AlignBottom)
+        refresh = self.refresh_btn = Button("Refresh from relay", "secondary", "refresh", "sm")
         refresh.clicked.connect(self._refresh_directory)
         imp = Button("Import an ID file", "secondary", "download", "sm")
         imp.clicked.connect(self._import)
@@ -60,6 +61,7 @@ class ContactsPage(Page):
         self.search = QLineEdit()                         # lives in the list it filters (see below)
         self.search.setPlaceholderText("Search people")
         self.search.setClearButtonEnabled(True)
+        esc_clears(self.search)
         self.search.textChanged.connect(self.refresh)
 
         row = QHBoxLayout()
@@ -137,6 +139,7 @@ class ContactsPage(Page):
         needle = self.search.text().strip().lower()
         everyone = self.ctl.contacts()
         contacts = [c for c in everyone if needle in c["operator"].lower()]
+        self.list_title.setText(f"PEOPLE YOU CAN SEND TO · {len(everyone)}" if everyone else "PEOPLE YOU CAN SEND TO")
         self.search.setVisible(bool(everyone))
         self.empty.set_art("search" if everyone else "friends")
         if everyone:
@@ -178,8 +181,13 @@ class ContactsPage(Page):
         self.d_avatar.set_name(self._selected)
         self.d_name.setText(self._selected)
         src = c.get("source", "")
-        self.d_src.setText("Imported from a file you received" if "file-import" in src else
-                           "Found on the relay" if "relay" in src else "Seen on your network" if "lan" in src else "")
+        where = ("Imported from a file you received" if "file-import" in src else
+                 "Found on the relay" if "relay" in src else "Seen on your network" if "lan" in src else "")
+        last = max((o.get("created", 0) for o in self.ctl.outbox or [] if o.get("to") == self._selected), default=0)
+        if last:                                          # how you know each other, at a glance
+            where = f"{where} · you last sent them a file {time_ago(last)}" if where else \
+                f"You last sent them a file {time_ago(last)}"
+        self.d_src.setText(where)
         self.d_pill.set(text, kind)
         self.d_fp.set(c.get("fingerprint", ""))
         if trust == "verified":
@@ -207,9 +215,17 @@ class ContactsPage(Page):
 
     def _refresh_directory(self) -> None:
         self._say("Looking people up…")
-        self.ctl.run_job(self.ctl.make_directory_job(),
-                         on_success=lambda r: (self._say(""), self.ctl.contacts_changed.emit()),
-                         on_fail=self._say)
+        self.refresh_btn.set_busy(True, "Looking up…")
+        self.ctl.run_job(self.ctl.make_directory_job(), on_success=self._directory_done, on_fail=self._directory_failed)
+
+    def _directory_done(self, _result) -> None:
+        self.refresh_btn.set_busy(False)
+        self._say("")
+        self.ctl.contacts_changed.emit()
+
+    def _directory_failed(self, message: str) -> None:
+        self.refresh_btn.set_busy(False)
+        self._say(message)
 
     def _export(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Where should the ID file be saved?")
@@ -224,9 +240,13 @@ class ContactsPage(Page):
     def _import(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose an ID file", "", "ANSX ID (*.ansx_id)")
         if path:
-            try:
-                name = self.ctl.import_contact(path)
-                self.select(name)
-                info(self, "Contact added", f"{name} was added and marked verified, because you received their file directly.", "success")
-            except Exception as exc:
-                info(self, "Could not import", str(exc), "error")
+            self.import_path(path)
+
+    def import_path(self, path: str) -> None:
+        """Add the person in an ID file (chosen with the button, or dropped on the window)."""
+        try:
+            name = self.ctl.import_contact(path)
+            self.select(name)
+            info(self, "Contact added", f"{name} was added and marked verified, because you received their file directly.", "success")
+        except Exception as exc:
+            info(self, "Could not import", str(exc), "error")

@@ -67,7 +67,24 @@ RADIUS_SM = 8
 
 
 def current() -> str:
+    """The look in use: "dark" or "light"."""
     return _state["name"]
+
+
+def choice() -> str:
+    """What the person picked: "dark", "light" or "auto" (follow the computer's appearance)."""
+    return _state.get("choice", _state["name"])
+
+
+def _system_scheme() -> str:
+    """ "dark" or "light" from the operating system's appearance, "" if it does not say."""
+    try:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QGuiApplication
+        scheme = QGuiApplication.styleHints().colorScheme()
+        return {Qt.ColorScheme.Dark: "dark", Qt.ColorScheme.Light: "light"}.get(scheme, "")
+    except Exception:
+        return ""
 
 
 def color(name: str) -> str:
@@ -220,6 +237,14 @@ QPushButton[variant="primary"]:focus, QPushButton[variant="danger"]:focus {{ bor
 QPushButton[variant="ghost"]:focus {{ border-color: {t['primary']}; color: {t['text']}; }}
 QPushButton[nav="true"]:focus {{ border: 1px solid {t['primary']}; padding: 10px 13px; }}
 QFrame#Card[clickable="true"]:focus {{ border: 1px solid {t['primary']}; }}
+QPushButton[chip="key"] {{ font-family: "{mono}"; font-size: 12px; font-weight: 700; color: {t['primary_on_soft']};
+                          background: {t['primary_soft']}; border: 1px solid {t['primary_line']}; border-radius: 15px;
+                          padding: 6px 12px; }}
+QPushButton[chip="key"]:hover {{ border-color: {t['primary']}; }}
+QPushButton[chip="key"]:focus {{ border-color: {t['primary']}; }}
+QWidget#ActivityRow {{ border-radius: 10px; border: 1px solid transparent; }}
+QWidget#ActivityRow:hover {{ background: {t['surface_alt']}; }}
+QWidget#ActivityRow:focus {{ background: {t['surface_alt']}; border-color: {t['primary']}; }}
 QCheckBox {{ spacing: 10px; }}
 QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {t['border_strong']};
                        background: {t['surface_alt']}; }}
@@ -278,6 +303,8 @@ QFrame#Toast[kind="success"] {{ border-left: 4px solid {t['success']}; }}
 QFrame#Toast[kind="warning"] {{ border-left: 4px solid {t['warning']}; }}
 QFrame#Toast[kind="error"]   {{ border-left: 4px solid {t['danger']}; }}
 QFrame#Toast[kind="info"]    {{ border-left: 4px solid {t['info']}; }}
+QPushButton#ToastClose {{ background: transparent; border: none; border-radius: 11px; padding: 0; }}
+QPushButton#ToastClose:hover {{ background: {t['surface_hover']}; }}
 
 /* ── drop zone ── */
 QFrame#DropZone {{ background: {t['surface']}; border: 2px dashed {t['primary_line']}; border-radius: 16px; }}
@@ -288,6 +315,8 @@ QMessageBox {{ background: {t['surface']}; }}
 
 
 def apply(app: QApplication, name: str = "dark") -> None:
+    _state["choice"] = name
+    name = (_system_scheme() or "dark") if name == "auto" else name       # "auto": the computer's light or dark
     _state["name"] = name
     _state["tokens"] = DARK if name == "dark" else LIGHT
     app.setFont(base_font())

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 
 from security_core import SecurityCore
 from ui import art, motion, theme
-from ui.controller import AppController, Job
+from ui.controller import AppController, Job, pref
 from ui.dialogs import confirm
 from ui.widgets import (
     add_reveal_toggle, escape_goes_back,
@@ -151,7 +151,9 @@ class LoginView(_Center):
                                                   avatar=name, right=[Pill("Card" if mode == "nfc" else "Passphrase", "neutral")]))
         self.people.setFixedHeight(min(self.people.count(), 3) * 66 + 6)
         if self.people.count():
-            self.people.setCurrentRow(0)
+            names = [self.people.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.people.count())]
+            last = pref("last_operator", "")                # whoever unlocked last is the likely one again
+            self.people.setCurrentRow(names.index(last) if last in names else 0)
         self._err("")
 
     def _picked(self) -> None:
@@ -176,7 +178,7 @@ class LoginView(_Center):
         self._err("")
 
     def _busy(self, on: bool) -> None:
-        self.unlock_btn.setEnabled(not on)
+        self.unlock_btn.set_busy(on, "Unlocking…")
         self.people.setEnabled(not on)
         self.pass_edit.setEnabled(not on)
         self.create_btn.setEnabled(not on)
