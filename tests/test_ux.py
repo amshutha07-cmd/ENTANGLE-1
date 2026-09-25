@@ -978,3 +978,19 @@ def test_a_busy_button_spins_and_comes_back_as_it_was():
     assert b.busy() and not b.isEnabled() and b.text() == "Testing…"
     b.set_busy(False)
     assert not b.busy() and b.isEnabled() and b.text() == "Test"
+
+
+def test_the_current_page_bar_slides_between_sidebar_items(signed_in, monkeypatch):
+    from ui import motion
+    monkeypatch.delenv("ANSX_REDUCE_MOTION", raising=False)
+    monkeypatch.setattr(motion, "_system", False)
+    motion.set_reduced(False)
+    _ctl, win = signed_in
+    win.go("home")
+    pump()
+    win.go("inbox")
+    glider = win._glider
+    assert glider.isVisible() and glider.parentWidget()._ansx_sliding      # on its way
+    pump(0.5)
+    assert not glider.isVisible() and not glider.parentWidget()._ansx_sliding
+    assert glider.geometry() == glider.spot(win.nav["inbox"])              # and it ended at the new item

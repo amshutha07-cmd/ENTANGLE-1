@@ -9,7 +9,7 @@ import os
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
-    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, QVariantAnimation,
+    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation,
     pyqtProperty, pyqtSignal,
 )
 from PyQt6.QtGui import (
@@ -446,7 +446,8 @@ class NavButton(QPushButton):
 
     def paintEvent(self, e) -> None:
         super().paintEvent(e)
-        if self.isChecked():                              # the current page: a short neon bar at the left edge
+        sliding = getattr(self.parentWidget(), "_ansx_sliding", False)     # the sidebar's glider is moving it
+        if self.isChecked() and not sliding:              # the current page: a short neon bar at the left edge
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.setPen(Qt.PenStyle.NoPen)
@@ -479,6 +480,53 @@ class NavButton(QPushButton):
 
 
 # ── small display pieces ─────────────────────────────────────────────────────────────────────────
+class NavGlider(QWidget):
+    """The current page's neon bar, sliding from the old sidebar item to the new one."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hide()
+
+    @staticmethod
+    def spot(b: QWidget) -> QRect:
+        """Where a sidebar item draws its bar, in the sidebar's coordinates."""
+        top_left = b.mapTo(b.parentWidget(), QPoint(0, (b.height() - 18) // 2))
+        return QRect(top_left.x(), top_left.y(), 3, 18)
+
+    def slide(self, old: QWidget, new: QWidget) -> None:
+        if motion.reduced() or old is None or old is new or not self.parentWidget().isVisible():
+            return
+        anim = QPropertyAnimation(self, b"geometry", self)
+        anim.setDuration(motion.NORMAL)
+        anim.setStartValue(self.spot(old))
+        anim.setEndValue(self.spot(new))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(self._landed)
+        self.parentWidget()._ansx_sliding = True          # on this sidebar only
+        self.setGeometry(self.spot(old))
+        self.show()
+        self.raise_()
+        for b in self.parentWidget().findChildren(NavButton):
+            b.update()
+        motion._keep(self, anim, "_ansx_slide")
+        anim.start()
+
+    def _landed(self) -> None:
+        self.parentWidget()._ansx_sliding = False
+        self.hide()
+        for b in self.parentWidget().findChildren(NavButton):
+            b.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.qcolor("primary"))
+        p.drawRoundedRect(QRectF(self.rect()), 1.5, 1.5)
+        p.end()
+
+
 class Pill(QLabel):
     def __init__(self, text: str = "", kind: str = "neutral", parent=None):
         super().__init__(text, parent)

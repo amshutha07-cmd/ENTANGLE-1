@@ -26,7 +26,8 @@ from ui.pages.send import SendPage
 from ui.pages.settings import SettingsPage
 from ui.pages.vault import VaultPage
 from ui.widgets import (
-    Avatar, Banner, Button, ClickablePill, DropOverlay, IconBadge, NavButton, Pill, ToastHost, file_icon, label,
+    Avatar, Banner, Button, ClickablePill, DropOverlay, IconBadge, NavButton, NavGlider, Pill, ToastHost, file_icon,
+    label,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,7 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _c, k=key: self.go(k))
             lay.addWidget(b)
             self.nav[key] = b
+        self._glider = NavGlider(side)                    # the current page's bar slides between items
         lay.addStretch(1)
         chip = QFrame()
         chip.setObjectName("CardAlt")
@@ -405,8 +407,11 @@ class MainWindow(QMainWindow):
         if changed:
             motion.fade_in(page, motion.FAST)
             self._show_work()
+        before = next((b for b in self.nav.values() if b.isChecked()), None)
         for k, b in self.nav.items():
             b.setChecked(k == key)
+        if changed:
+            self._glider.slide(before, self.nav[key])
         page.on_show()
         if tab:
             page.show_tab(tab)
