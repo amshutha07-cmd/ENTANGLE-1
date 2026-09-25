@@ -30,7 +30,7 @@ def server(tmp_path_factory):
                  user_quota_bytes=300_000, register_per_ip_hour=1000, transfers_per_user_hour=1000, clock_skew=60)
     app = create_app(cfg)
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
-    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", ws="none"))
     t = threading.Thread(target=srv.run, daemon=True); t.start()
     for _ in range(100):
         try:

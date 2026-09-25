@@ -16,7 +16,7 @@ Authentication (every non-public call)
   Signed bytes: "ANSX1\\n{METHOD}\\n{path?query}\\n{ts}\\n{nonce}\\n{sha256_hex(body)}"
   Timestamps must be within ±CLOCK_SKEW; every nonce is single-use (replay protection, persisted).
 
-Run:  uvicorn relay.server:create_app --factory --host 0.0.0.0 --port 8000
+Run:  uvicorn relay.server:create_app --factory --host 0.0.0.0 --port 8000 --ws none
 Env:  ANSX_RELAY_DATA (state dir), ANSX_MAX_TRANSFER_MB, ANSX_USER_QUOTA_MB, ANSX_TTL_HOURS, ...
 """
 from __future__ import annotations

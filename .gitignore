@@ -36,3 +36,4 @@ outbox/
 
 # relay server data (names, waiting files)
 relay_data/
+.vscode/

@@ -543,7 +543,8 @@ def main() -> int:
         env = dict(os.environ, ANSX_RELAY_DATA=args.data)
         relay = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "relay.server:create_app", "--factory", "--host", args.host,
-             "--port", str(args.port), "--log-level", "warning", "--proxy-headers"],
+             "--port", str(args.port), "--log-level", "warning", "--proxy-headers",
+             "--ws", "none"],                                  # the relay has no WebSocket routes
             cwd=ROOT, env=env)
         if not wait_until_up(local, 20):
             relay.terminate()
