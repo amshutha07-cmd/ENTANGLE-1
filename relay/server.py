@@ -130,8 +130,7 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
     def db():
         conn = sqlite3.connect(db_path, timeout=15, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA foreign_keys=ON")            # per connection; WAL is set once, below
         try:
             conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -145,6 +144,9 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
 
     _init = sqlite3.connect(db_path, timeout=15)
     try:
+        # WAL once, here, before any request: the mode is stored in the file. Switched per request instead, the first
+        # requests to a new relay raced to switch it and SQLite failed one of them at once ("database is locked").
+        _init.execute("PRAGMA journal_mode=WAL")
         _init.executescript("""
             CREATE TABLE IF NOT EXISTS identities (
                 username TEXT PRIMARY KEY, public_key TEXT NOT NULL, fingerprint TEXT NOT NULL,

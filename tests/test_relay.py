@@ -294,3 +294,17 @@ def test_network_errors_are_retried(server, users, tmp_path, monkeypatch):
     assert state["fail"] == 0
     monkeypatch.undo()
     bob.reject(tid)
+
+
+def test_a_new_relay_is_in_wal_mode_before_its_first_request(tmp_path):
+    """
+    Regression: every request used to switch the database to WAL itself, so the first requests to a new relay raced
+    to do it and SQLite failed one of them at once ("database is locked", a 500). The switch now happens at start.
+    """
+    import sqlite3
+    create_app(Config(data_dir=str(tmp_path)))
+    conn = sqlite3.connect(str(tmp_path / "relay.db"))
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()
