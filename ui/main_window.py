@@ -132,6 +132,9 @@ class MainWindow(QMainWindow):
         }
         for page in self.pages.values():
             self.content.addWidget(page)
+        for key, _text, icon in NAV:
+            if key != "home":                              # Home greets you; the others wear their sidebar icon
+                self.pages[key].header.set_icon(icon)
         self._wire()
 
         self.toasts = ToastHost(root)

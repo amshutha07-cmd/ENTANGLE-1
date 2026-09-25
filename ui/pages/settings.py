@@ -44,6 +44,17 @@ class StorageRow(QWidget):
         lay.addWidget(rm)
 
 
+def _title(text: str, icon: str) -> QWidget:
+    """A section title with its icon, so the long settings page can be scanned at a glance."""
+    w = QWidget()
+    row = QHBoxLayout(w)
+    row.setContentsMargins(0, 0, 0, 2)
+    row.setSpacing(10)
+    row.addWidget(IconBadge(icon, "primary", 30))
+    row.addWidget(label(text, "h2", wrap=False), 1)
+    return w
+
+
 class SettingsPage(Page):
     theme_changed = pyqtSignal(str)
     lock_requested = pyqtSignal()
@@ -55,7 +66,7 @@ class SettingsPage(Page):
 
         # ── account ──
         acct = Card(padding=20, spacing=10)
-        acct.body.addWidget(label("Account", "h2", wrap=False))
+        acct.body.addWidget(_title("Account", "key"))
         self.acct_name = KeyValue("Name")
         self.acct_mode = KeyValue("Sign-in")
         acct.body.addWidget(self.acct_name)
@@ -73,7 +84,7 @@ class SettingsPage(Page):
 
         # ── relay ──
         rel = self.relay_card = Card(padding=20, spacing=10)
-        rel.body.addWidget(label("Connection", "h2", wrap=False))
+        rel.body.addWidget(_title("Connection", "wifi"))
         rel.body.addWidget(label("The relay is the mailbox that carries your encrypted files between people. "
                                  "It can never read them. Use the address your administrator gave you.", "muted"))
         r = QHBoxLayout()
@@ -96,7 +107,7 @@ class SettingsPage(Page):
         # ── storage ──
         sto = self.storage_card = Card(padding=20, spacing=10)
         head = QHBoxLayout()
-        head.addWidget(label("Cloud storage", "h2", wrap=False), 1)
+        head.addWidget(_title("Cloud storage", "cloud"), 1)
         add = Button("Add an account", "primary", "plus", "sm")
         add.clicked.connect(self._add_storage)
         head.addWidget(add)
@@ -112,7 +123,7 @@ class SettingsPage(Page):
 
         # ── appearance / lock ──
         app = Card(padding=20, spacing=10)
-        app.body.addWidget(label("Appearance and privacy", "h2", wrap=False))
+        app.body.addWidget(_title("Appearance and privacy", "moon"))
         r = QHBoxLayout()
         r.addWidget(label("Theme", "body", wrap=False), 1)
         self.theme_combo = QComboBox()
@@ -157,7 +168,7 @@ class SettingsPage(Page):
 
         # ── keyboard shortcuts ──
         keys = self.shortcuts_card = Card(padding=20, spacing=6)
-        keys.body.addWidget(label("Keyboard shortcuts", "h2", wrap=False))
+        keys.body.addWidget(_title("Keyboard shortcuts", "code"))
 
         def native(seq: str) -> str:
             from PyQt6.QtGui import QKeySequence
@@ -176,7 +187,7 @@ class SettingsPage(Page):
 
         # ── security details ──
         sec = Card(padding=20, spacing=6)
-        sec.body.addWidget(label("Security details", "h2", wrap=False))
+        sec.body.addWidget(_title("Security details", "shield"))
         self.sec_keys = KeyValue("Key protection")
         self.sec_engine = KeyValue("Encryption engine")
         self.sec_data = KeyValue("Data folder", mono=True)

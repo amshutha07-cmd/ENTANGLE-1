@@ -8,7 +8,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QListWidget, QListWidgetItem, QStackedWidget, QVBoxLayout, QWidget,
+    QFileDialog, QFrame, QHBoxLayout, QListWidget, QListWidgetItem, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from relay_client import RelayError
@@ -18,7 +18,7 @@ from ui.pages.base import Page
 from ui.pages.vault import open_folder
 from ui import motion
 from ui.widgets import (
-    Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, ProgressPanel,
+    Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, ProgressPanel, SegmentPill,
     human_size, label, time_ago,
 )
 
@@ -59,13 +59,19 @@ class InboxPage(Page):
         self.actions.addWidget(self.open_btn)
 
         tabs = QHBoxLayout()
-        tabs.setSpacing(6)
+        seg = QFrame()                                    # a segmented switch: a highlight slides to the chosen side
+        seg.setObjectName("Segmented")
+        seg_lay = QHBoxLayout(seg)
+        seg_lay.setContentsMargins(3, 3, 3, 3)
+        seg_lay.setSpacing(2)
+        self._seg_pill = SegmentPill(seg)                 # made first, so it sits under the buttons
         self.tab_in = Button("Received", "secondary", "inbox", "sm")
         self.tab_out = Button("Sent", "ghost", "send", "sm")
         self.tab_in.clicked.connect(lambda: self.show_tab("received"))
         self.tab_out.clicked.connect(lambda: self.show_tab("sent"))
-        tabs.addWidget(self.tab_in)
-        tabs.addWidget(self.tab_out)
+        seg_lay.addWidget(self.tab_in)
+        seg_lay.addWidget(self.tab_out)
+        tabs.addWidget(seg)
         tabs.addStretch()
         self.root.addLayout(tabs)
 
@@ -167,6 +173,7 @@ class InboxPage(Page):
             b.style().unpolish(b)
             b.style().polish(b)
             b.refresh_icon()
+        self._seg_pill.move_to(self.tab_in if received else self.tab_out)
 
     def on_show(self) -> None:
         self._show_connection(self.ctl.relay_state)
@@ -196,8 +203,8 @@ class InboxPage(Page):
             left = _days_left(it["expires"]) if it.get("expires") else ""
             when = f"{human_size(it['size'])} · {time_ago(it['created'])}" + (
                 "" if not left else " · expired" if left == "expired" else f" · {left} left")   # what needs accepting soon
-            self.inbox_list.setItemWidget(li, ListRow(it["from"], when,
-                                                      avatar=it["from"], right=[Pill(text, kind)]))
+            self.inbox_list.setItemWidget(li, ListRow(it["from"], when, avatar=it["from"], right=[Pill(text, kind)],
+                                                      verified=trust == "verified"))
             if it["id"] == keep:
                 self.inbox_list.setCurrentItem(li)
         self.inbox_list.blockSignals(False)
@@ -241,6 +248,7 @@ class InboxPage(Page):
         trust = self.ctl.trust(it["from"], it.get("sender_fingerprint", ""))
         text, kind = TRUST_PILL[trust]
         self.d_avatar.set_name(it["from"])
+        self.d_avatar.set_ring(trust == "verified")
         self.d_from.setText(it["from"])
         self.d_sub.setText(f"Sent {time_ago(it['created'])}")
         self.d_pill.set(text, kind)

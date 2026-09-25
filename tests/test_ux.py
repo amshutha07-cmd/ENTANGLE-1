@@ -994,3 +994,76 @@ def test_the_current_page_bar_slides_between_sidebar_items(signed_in, monkeypatc
     pump(0.5)
     assert not glider.isVisible() and not glider.parentWidget()._ansx_sliding
     assert glider.geometry() == glider.spot(win.nav["inbox"])              # and it ended at the new item
+
+
+def test_title_bars_and_native_dialogs_follow_the_theme(monkeypatch):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QGuiApplication
+    from ui import theme
+    asked = []
+
+    class Hints:                                                     # stands in for the system's style hints
+        def setColorScheme(self, scheme):
+            asked.append(scheme)
+
+        def blockSignals(self, _on):
+            return False
+
+        def colorScheme(self):
+            return Qt.ColorScheme.Unknown
+    monkeypatch.setattr(QGuiApplication, "styleHints", staticmethod(lambda: Hints()))
+    for name in ("light", "auto", "dark"):
+        theme.apply(app, name)
+    assert asked == [Qt.ColorScheme.Light, Qt.ColorScheme.Unknown, Qt.ColorScheme.Dark]
+
+
+def test_verified_people_wear_a_ring():
+    from ui.widgets import ListRow
+    plain, trusted = ListRow("sam", "Found on the relay", avatar="sam"), ListRow("sam", "Verified key", avatar="sam", verified=True)
+    assert not getattr(plain.avatar, "_ring", False) and trusted.avatar._ring
+    assert not trusted.avatar.grab().isNull()
+
+
+def test_drop_targets_run_their_dashed_edge_while_a_file_hovers(monkeypatch):
+    from ui import motion
+    from ui.widgets import DropZone
+    monkeypatch.delenv("ANSX_REDUCE_MOTION", raising=False)
+    monkeypatch.setattr(motion, "_system", False)
+    motion.set_reduced(False)
+    z = DropZone()
+    z.resize(400, 160)
+    z.show()
+    running = z._ants.State.Running
+    z._set_active(True)
+    assert z._ants.state() == running
+    pump(0.15)                                                       # a few frames, no errors
+    assert not z.grab().isNull()
+    z._set_active(False)
+    assert z._ants.state() != running
+
+
+def test_recent_activity_is_grouped_by_day(signed_in, monkeypatch):
+    import activity
+    from ui.pages.home import _day_heading
+    _ctl, win = signed_in
+    now = time.time()
+    assert _day_heading(int(now)) == "TODAY" and _day_heading(int(now) - 86400) == "YESTERDAY"
+    with monkeypatch.context() as m:                                 # the clock, for this one entry only
+        m.setattr(activity.time, "time", lambda: now - 3 * 86400)
+        activity.add("protected", "Protected old.pdf", operator="ux_user")  # three days ago
+    activity.add("protected", "Protected new.pdf", operator="ux_user")
+    win.go("home")
+    pump()
+    heads = [w.text() for w in win.pages["home"].activity.findChildren(QLabel) if w.property("role") == "eyebrow"]
+    assert heads[0] == "TODAY" and _day_heading(int(now - 3 * 86400)) in heads
+
+
+def test_the_inbox_switch_highlight_slides_to_the_chosen_side(signed_in):
+    _ctl, win = signed_in
+    win.go("inbox")
+    page = win.pages["inbox"]
+    pump()
+    assert page._seg_pill.geometry() == page.tab_in.geometry()        # starts under "Received"
+    win.go("sent")
+    pump(0.5)
+    assert page._seg_pill.geometry() == page.tab_out.geometry()       # and ends under "Sent"

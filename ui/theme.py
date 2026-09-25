@@ -179,6 +179,7 @@ def stylesheet() -> str:
 * {{ outline: none; }}
 QWidget {{ color: {t['text']}; background: transparent; }}
 QDialog, QWidget#Root {{ background: {t['bg']}; }}
+QDialog {{ background: qradialgradient(cx:1.0, cy:-0.1, radius:0.9, fx:1.0, fy:-0.1, stop:0 {t['glow']}, stop:1 {t['bg']}); }}
 /* the window: a violet light in the top corner and a mint one low down; pages inside let it through */
 QMainWindow {{ background: qradialgradient(cx:0.55, cy:1.15, radius:0.75, fx:0.55, fy:1.15,
                                         stop:0 {t['glow_2']}, stop:1 {t['bg']}); }}
@@ -243,6 +244,12 @@ QPushButton[chip="key"] {{ font-family: "{mono}"; font-size: 12px; font-weight: 
 QPushButton[chip="key"]:hover {{ border-color: {t['primary']}; }}
 QPushButton[chip="key"]:focus {{ border-color: {t['primary']}; }}
 QWidget#ActivityRow {{ border-radius: 10px; border: 1px solid transparent; }}
+QWidget#VaultRow {{ border-radius: 10px; }}
+QFrame#Segmented {{ background: {t['surface']}; border: 1px solid {t['border']}; border-radius: 10px; }}
+QFrame#Segmented QPushButton {{ background: transparent; border: 1px solid transparent; }}
+QFrame#Segmented QPushButton[variant="secondary"] {{ color: {t['primary_on_soft']}; }}
+QFrame#Segmented QPushButton[variant="ghost"]:hover {{ color: {t['text']}; }}
+QWidget#VaultRow:hover {{ background: {t['surface_alt']}; }}
 QWidget#ActivityRow:hover {{ background: {t['surface_alt']}; }}
 QWidget#ActivityRow:focus {{ background: {t['surface_alt']}; border-color: {t['primary']}; }}
 QCheckBox {{ spacing: 10px; }}
@@ -308,15 +315,47 @@ QPushButton#ToastClose:hover {{ background: {t['surface_hover']}; }}
 
 /* ── drop zone ── */
 QFrame#DropZone {{ background: {t['surface']}; border: 2px dashed {t['primary_line']}; border-radius: 16px; }}
-QFrame#DropZone[active="true"] {{ background: {t['primary_soft']}; border: 2px dashed {t['primary']}; }}
+QFrame#DropZone[active="true"] {{ background: {t['primary_soft']}; border: 2px solid transparent; }}
 
 QMessageBox {{ background: {t['surface']}; }}
+
+/* ── menus (right-click and the like) ── */
+QMenu {{ background: {t['surface']}; border: 1px solid {t['border_strong']}; border-radius: 10px; padding: 6px; }}
+QMenu::item {{ color: {t['text']}; padding: 7px 18px 7px 12px; border-radius: 6px; background: transparent; }}
+QMenu::item:selected {{ background: {t['primary_soft']}; color: {t['primary_on_soft']}; }}
+QMenu::item:disabled {{ color: {t['text_faint']}; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 5px 8px; }}
 """
+
+
+def _match_window_chrome(choice: str) -> None:
+    """
+    Title bars, native menus and file dialogs follow the app's theme instead of the computer's: without this, the
+    dark app on a Mac in light mode gets a white title bar and white file dialogs. Needs Qt 6.8 (older: no change).
+    """
+    try:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QGuiApplication
+        hints = QGuiApplication.styleHints()
+        if not hasattr(hints, "setColorScheme"):
+            return
+        scheme = {"dark": Qt.ColorScheme.Dark, "light": Qt.ColorScheme.Light}.get(choice, Qt.ColorScheme.Unknown)
+        hints.blockSignals(True)                          # our own change, not the computer switching
+        try:
+            hints.setColorScheme(scheme)
+        finally:
+            hints.blockSignals(False)
+    except Exception:
+        pass
 
 
 def apply(app: QApplication, name: str = "dark") -> None:
     _state["choice"] = name
-    name = (_system_scheme() or "dark") if name == "auto" else name       # "auto": the computer's light or dark
+    if name == "auto":                                    # "auto": the computer's light or dark
+        _match_window_chrome("auto")                      # back to the system's own look first, then read it
+        name = _system_scheme() or "dark"
+    else:
+        _match_window_chrome(name)
     _state["name"] = name
     _state["tokens"] = DARK if name == "dark" else LIGHT
     app.setFont(base_font())

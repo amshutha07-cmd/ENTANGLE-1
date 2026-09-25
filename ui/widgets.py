@@ -527,6 +527,51 @@ class NavGlider(QWidget):
         p.end()
 
 
+class SegmentPill(QWidget):
+    """The highlight of a segmented switch: it slides to the chosen button instead of jumping."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._target: Optional[QWidget] = None
+        parent.installEventFilter(self)
+
+    def move_to(self, b: QWidget) -> None:
+        self._target = b
+        if b.width() <= 1 or not self.parentWidget().isVisible() or motion.reduced():
+            self._snap()                                  # not laid out yet, or motion off: go straight there
+            return
+        anim = QPropertyAnimation(self, b"geometry", self)
+        anim.setDuration(motion.NORMAL)
+        anim.setStartValue(self.geometry())
+        anim.setEndValue(b.geometry())
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        motion._keep(self, anim, "_ansx_slide")
+        anim.start()
+
+    def _snap(self) -> None:
+        slide = getattr(self, "_ansx_slide", None)
+        if slide is not None and slide.state() == QPropertyAnimation.State.Running:
+            return                                        # mid-slide: let it land
+        if self._target is not None:
+            self.setGeometry(self._target.geometry())
+            self.show()
+            self.lower()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parent() and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            motion.later(0, self._snap)                   # after the switch has laid its buttons out
+        return False
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(theme.qcolor("primary_line"), 1))
+        p.setBrush(theme.qcolor("primary_soft"))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        p.end()
+
+
 class Pill(QLabel):
     def __init__(self, text: str = "", kind: str = "neutral", parent=None):
         super().__init__(text, parent)
@@ -555,6 +600,11 @@ class Avatar(QWidget):
         self._name = name
         self.update()
 
+    def set_ring(self, on: bool) -> None:
+        """A thin green ring with a gap: this person's key is verified. Visible on any badge colour."""
+        self._ring = on
+        self.update()
+
     def set_presence(self, kind: Optional[str]) -> None:
         """A small status dot on the badge, e.g. the relay connection: success / info / warning / danger / neutral."""
         self._presence = kind
@@ -567,7 +617,14 @@ class Avatar(QWidget):
         idx = int(hashlib.md5(self._name.encode()).hexdigest(), 16) % len(palette)
         p.setBrush(QColor(palette[idx]))
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(0, 0, self._size, self._size)
+        if getattr(self, "_ring", False):
+            p.drawEllipse(QRectF(4, 4, self._size - 8, self._size - 8))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(theme.qcolor("success"), 2.0))
+            p.drawEllipse(QRectF(1, 1, self._size - 2, self._size - 2))
+            p.setPen(Qt.PenStyle.NoPen)
+        else:
+            p.drawEllipse(0, 0, self._size, self._size)
         p.setPen(QColor(ink))
         f = QFont(self.font())
         f.setBold(True)
@@ -784,6 +841,17 @@ class SectionHeader(QWidget):
         if subtitle:
             self.subtitle = label(subtitle, "muted")
             lay.addWidget(self.subtitle)
+
+    def set_icon(self, name: str) -> None:
+        """The page's icon (the same as its sidebar item) as a neon badge before the title."""
+        lay = self.layout()
+        at = lay.indexOf(self.title)
+        lay.removeWidget(self.title)
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addWidget(IconBadge(name, "primary", 34), 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.title, 1)
+        lay.insertLayout(at, row)
 
 
 class KeyValue(QWidget):
@@ -1104,6 +1172,29 @@ class ProgressPanel(Card):
         self.hide()
 
 
+def _marching(owner: QWidget) -> QVariantAnimation:
+    """A looping 0 → 1 phase for a dashed edge that runs round ("marching ants"); repaints its owner."""
+    a = QVariantAnimation(owner)
+    a.setStartValue(0.0)
+    a.setEndValue(1.0)
+    a.setDuration(800)
+    a.setLoopCount(-1)
+    a.valueChanged.connect(lambda _v: owner.update())   # the animation is the owner's child: gone with it
+    return a
+
+
+def _dashed_frame(w: QWidget, r: QRectF, radius: float, ants: QVariantAnimation) -> None:
+    p = QPainter(w)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(theme.qcolor("primary"), 2)
+    pen.setDashPattern([5, 4])
+    pen.setDashOffset(-9 * float(ants.currentValue() or 0.0))     # one dash + gap per loop: a steady crawl
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(r, radius, radius)
+    p.end()
+
+
 class DropZone(QFrame):
     """Drop a file here or click to browse."""
     file_chosen = pyqtSignal(str)                  # the first file (older callers)
@@ -1111,6 +1202,7 @@ class DropZone(QFrame):
 
     def __init__(self, title: str = "Drop a file here", hint: str = "or click to choose one", parent=None):
         super().__init__(parent)
+        self._ants = _marching(self)
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1129,6 +1221,16 @@ class DropZone(QFrame):
     def _set_active(self, on: bool) -> None:
         self.setProperty("active", "true" if on else "false")
         polish(self)
+        if on and not motion.reduced():
+            self._ants.start()                            # the dashed edge runs round while a file hovers over it
+        else:
+            self._ants.stop()
+        self.update()
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if self.property("active") == "true":
+            _dashed_frame(self, QRectF(self.rect()).adjusted(1, 1, -1, -1), 16, self._ants)
 
     def dragEnterEvent(self, e) -> None:
         if e.mimeData().hasUrls() and any(u.isLocalFile() and os.path.isfile(u.toLocalFile()) for u in e.mimeData().urls()):
@@ -1160,14 +1262,16 @@ class ListRow(QWidget):
     """Avatar/icon + two text lines + optional trailing widgets, for QListWidget.setItemWidget."""
 
     def __init__(self, title: str, subtitle: str = "", avatar: str = "", icon: str = "", right: Optional[list] = None,
-                 parent=None, icon_kind: str = "neutral"):
+                 parent=None, icon_kind: str = "neutral", verified: bool = False):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(12)
         if avatar:
-            lay.addWidget(Avatar(avatar, 38))
+            self.avatar = Avatar(avatar, 38)
+            self.avatar.set_ring(verified)
+            lay.addWidget(self.avatar)
         elif icon:
             lay.addWidget(IconBadge(icon, icon_kind, 38))
         col = QVBoxLayout()
@@ -1289,6 +1393,7 @@ class DropOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._title = self._detail = ""
         self._icon, self._kind = "upload", "primary"
+        self._ants = _marching(self)
         parent.installEventFilter(self)
         self.hide()
 
@@ -1304,7 +1409,13 @@ class DropOverlay(QWidget):
         if not self.isVisible():
             self.show()
             motion.fade_in(self, motion.FAST)
+        if not motion.reduced():
+            self._ants.start()
         self.update()
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        self._ants.stop()
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
@@ -1315,6 +1426,7 @@ class DropOverlay(QWidget):
         frame = QRectF(self.rect()).adjusted(18, 18, -18, -18)
         pen = QPen(theme.qcolor("primary"), 2)
         pen.setDashPattern([5, 4])
+        pen.setDashOffset(-9 * float(self._ants.currentValue() or 0.0))   # the edge runs round while dragging
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(frame, 22, 22)

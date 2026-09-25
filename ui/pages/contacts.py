@@ -158,7 +158,7 @@ class ContactsPage(Page):
             li.setSizeHint(QSize(0, 62))
             self.list.addItem(li)
             self.list.setItemWidget(li, ListRow(c["operator"], c.get("fingerprint", "")[:26] + "…", avatar=c["operator"],
-                                                right=[Pill(text, kind)]))
+                                                right=[Pill(text, kind)], verified=trust == "verified"))
             if c["operator"] == self._selected:
                 self.list.setCurrentItem(li)
         self.list.blockSignals(False)
@@ -179,6 +179,7 @@ class ContactsPage(Page):
         trust = self.ctl.trust(self._selected)
         text, kind = TRUST_PILL[trust]
         self.d_avatar.set_name(self._selected)
+        self.d_avatar.set_ring(trust == "verified")
         self.d_name.setText(self._selected)
         src = c.get("source", "")
         where = ("Imported from a file you received" if "file-import" in src else

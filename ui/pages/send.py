@@ -327,7 +327,8 @@ class SendPage(Page):
             sub = "Verified key" if trust == "verified" else "Key not verified yet"
             if c["operator"] in last:
                 sub += f" · you last sent them a file {time_ago(last[c['operator']])}"
-            self.people.setItemWidget(it, ListRow(c["operator"], sub, avatar=c["operator"], right=[Pill(text, kind)]))
+            self.people.setItemWidget(it, ListRow(c["operator"], sub, avatar=c["operator"], right=[Pill(text, kind)],
+                                                  verified=trust == "verified"))
             if c["operator"] == self.recipient or c["operator"] in self.recipients:
                 it.setSelected(True)
                 if c["operator"] == self.recipient:
@@ -489,6 +490,7 @@ class SendPage(Page):
         self.rv_file.set(entry["original_filename"])
         self.rv_size.set(human_size(entry.get("size")))
         self.rv_avatar.set_name(self.recipient)
+        self.rv_avatar.set_ring(self.ctl.trust(self.recipient) == "verified")
         self.rv_name.setText(self.recipient)
         self.rv_fp.set((info or {}).get("fingerprint", ""))
         trust = self.ctl.trust(self.recipient)

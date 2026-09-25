@@ -32,6 +32,8 @@ class VaultRow(QWidget):
     def __init__(self, entry: dict):
         super().__init__()
         self.entry_id = entry["id"]
+        self.setObjectName("VaultRow")                    # highlighted under the pointer (theme.py)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(14)

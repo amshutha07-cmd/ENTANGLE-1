@@ -51,10 +51,37 @@ class ActionCard(ClickableCard):
         self.pill.hide()
         row.addWidget(self.pill)
         self.body.addLayout(row)
-        self.body.addWidget(label(title, "h2", wrap=False))
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.title = label(title, "h2", wrap=False)
+        self.arrow = label("→", "mono", wrap=False)       # "this goes somewhere", while pointed at or focused
+        self.arrow.setStyleSheet("font-size: 16px; font-weight: 700;")
+        self.arrow.hide()
+        head.addWidget(self.title)
+        head.addWidget(self.arrow)
+        head.addStretch(1)
+        self.body.addLayout(head)
         self.default_text = text
         self.text = label(text, "muted")                  # replaced by live status when there is some
         self.body.addWidget(self.text)
+
+    def enterEvent(self, e) -> None:
+        self.arrow.show()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        if not self.hasFocus():
+            self.arrow.hide()
+        super().leaveEvent(e)
+
+    def focusInEvent(self, e) -> None:
+        self.arrow.show()
+        super().focusInEvent(e)
+
+    def focusOutEvent(self, e) -> None:
+        if not self.underMouse():
+            self.arrow.hide()
+        super().focusOutEvent(e)
 
 
 class StatusTile(Card):
@@ -88,6 +115,16 @@ def _names(names: list) -> str:
         return " and ".join(names)
     rest = len(names) - 2
     return f"{names[0]}, {names[1]} and {rest} other{'s' if rest != 1 else ''}"
+
+
+def _day_heading(ts: int) -> str:
+    day = datetime.date.fromtimestamp(ts)
+    today = datetime.date.today()
+    if day == today:
+        return "TODAY"
+    if day == today - datetime.timedelta(days=1):
+        return "YESTERDAY"
+    return day.strftime("%a %d %b").upper()
 
 
 def _greeting() -> str:
@@ -134,6 +171,8 @@ class HomePage(Page):
         super().__init__(ctl, "Home", "")
         self.key_chip = KeyChip()
         self.actions.addWidget(self.key_chip, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.ticker = label("", "eyebrow", wrap=False)    # "FRI 26 SEP · 3 PROTECTED · 1 WAITING · ONLINE"
+        self.header.layout().addWidget(self.ticker)
         self._fp_for: tuple = ("", "")
         self.card_protect = ActionCard("shield", "Protect a file", "Encrypt it and keep it safe, ready to send.")
         self.card_send = ActionCard("send", "Send a file", "Only the person you choose can open it.")
@@ -267,6 +306,11 @@ class HomePage(Page):
         """The three big tiles double as a status line: what is protected, what went out last, what is waiting."""
         ctl = self.ctl
         n = len(ctl.vault_entries()) if ctl.operator else 0
+        link = {"online": "ONLINE", "connecting": "CONNECTING", "offline": "OFFLINE", "conflict": "NAME CONFLICT"}.get(
+            ctl.relay_state, "NOT CONNECTED")
+        self.ticker.setText(" · ".join([datetime.datetime.now().strftime("%a %d %b").upper(), f"{n} PROTECTED",
+                                        f"{waiting} WAITING", link]))
+        self.ticker.setVisible(bool(ctl.operator))
         self.card_protect.text.setText(f"{n} file{'s' if n != 1 else ''} protected. Add more any time."
                                        if n else self.card_protect.default_text)
         latest = max(ctl.outbox or [], key=lambda o: o.get("created", 0), default=None)
@@ -297,7 +341,14 @@ class HomePage(Page):
             hl.addWidget(label("Nothing yet. Files you protect, send and receive will show up here.", "muted"), 1)
             lay.addWidget(row)
             return
+        day_shown = None
         for it in items:
+            day = _day_heading(it["ts"])
+            if day != day_shown and len({_day_heading(i["ts"]) for i in items}) > 1:
+                head = label(day, "eyebrow", wrap=False)   # TODAY / YESTERDAY / WED 24 SEP, once the list spans days
+                head.setContentsMargins(12, 8 if day_shown else 2, 0, 2)
+                lay.addWidget(head)
+            day_shown = day
             icon, kind = ACTIVITY_STYLE.get(it["kind"], ("info", "neutral"))
             target = ACTIVITY_LINK.get(it["kind"])
             row = _ActivityRow() if target else QWidget()
