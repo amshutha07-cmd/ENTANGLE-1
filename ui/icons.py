@@ -88,11 +88,11 @@ def pixmap(name: str, color: str, size: int = 20, stroke: float = 1.9) -> QPixma
 
 def app_icon() -> QIcon:
     """
-    The application's own icon (Dock, taskbar, window title, tray): a white shield on a blue rounded square, drawn
-    at every size a desktop asks for. Brand colours are fixed, not themed, so the icon looks the same everywhere.
+    The application's own icon (Dock, taskbar, window title, tray): a neon mint-to-violet shield on a dark glass tile,
+    drawn at every size a desktop asks for. Brand colours are fixed, not themed, so the icon looks the same everywhere.
     """
     from PyQt6.QtCore import QRectF
-    from PyQt6.QtGui import QColor, QLinearGradient
+    from PyQt6.QtGui import QColor, QLinearGradient, QPen
     ic = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256, 512, 1024):
         img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
@@ -101,15 +101,23 @@ def app_icon() -> QIcon:
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         inset = size * 0.06                               # the margin macOS icons conventionally keep
         box = QRectF(inset, inset, size - 2 * inset, size - 2 * inset)
-        grad = QLinearGradient(box.topLeft(), box.bottomRight())
-        grad.setColorAt(0.0, QColor("#6A89FF"))
-        grad.setColorAt(1.0, QColor("#3150D2"))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(grad)
-        p.drawRoundedRect(box, box.width() * 0.23, box.height() * 0.23)
+        tile = QLinearGradient(box.topLeft(), box.bottomRight())
+        tile.setColorAt(0.0, QColor("#1E1840"))           # a violet sheen in the corner, into near-black
+        tile.setColorAt(0.55, QColor("#0C0E18"))
+        tile.setColorAt(1.0, QColor("#07130F"))
+        edge = QLinearGradient(box.topLeft(), box.bottomRight())
+        edge.setColorAt(0.0, QColor(0, 255, 204, 150))
+        edge.setColorAt(1.0, QColor(177, 76, 255, 150))
+        stroke = max(1.0, size * 0.018)
+        p.setPen(QPen(edge, stroke) if size >= 32 else Qt.PenStyle.NoPen)
+        p.setBrush(tile)
+        half = stroke / 2
+        p.drawRoundedRect(box.adjusted(half, half, -half, -half), box.width() * 0.23, box.height() * 0.23)
         glyph = size * 0.58
-        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" '
-               f'stroke-width="{2.1 if size >= 64 else 2.4}" stroke-linecap="round" stroke-linejoin="round">'
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#neon)" '
+               f'stroke-width="{2.1 if size >= 64 else 2.5}" stroke-linecap="round" stroke-linejoin="round">'
+               f'<defs><linearGradient id="neon" x1="5" y1="3" x2="19" y2="21" gradientUnits="userSpaceOnUse">'
+               f'<stop offset="0" stop-color="#00FFCC"/><stop offset="1" stop-color="#B14CFF"/></linearGradient></defs>'
                f'{_P["shield"]}</svg>')
         QSvgRenderer(QByteArray(svg.encode())).render(
             p, QRectF((size - glyph) / 2, (size - glyph) / 2 + size * 0.01, glyph, glyph))

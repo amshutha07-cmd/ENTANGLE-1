@@ -87,9 +87,30 @@ SCENES: dict[str, dict[str, list]] = {
 }
 
 
+# The scenes are drawn in one pastel palette; the vault's neon look maps it to mint, violet and coin gold. Pinks,
+# white and the ink of the faces stay as drawn. (Keys are the colors in the SVG files, upper case.)
+NEON = {
+    # periwinkle → mint and teal
+    "#EEF2FF": "#E6FFF8", "#EAF0FF": "#E2FFF7", "#DCE5FF": "#CFFBEF", "#C9D5FF": "#B5F9E8", "#B9C8FF": "#9BF7E0",
+    "#9DB2FF": "#63F2D2", "#98AEFF": "#5CEFCF", "#8EA6FF": "#3BE8C4", "#7C86F5": "#12C7A5",
+    # the shield mascot: mint into violet
+    "#9BB1FF": "#5FFBD8", "#5B7CFA": "#8A5CFF",
+    # lavender → violet
+    "#C3B8FF": "#D9B8FF", "#9E93FA": "#B98AFF", "#8F84F5": "#A66BFF", "#7C70EC": "#8F4DFF",
+    # sparkles, blocks and friends: coin gold and neon mint
+    "#FFD66B": "#FFC83D", "#8CE0C4": "#3DFFC8", "#6FD3B1": "#14DDAA",
+}
+NEON_SCENE = {"cloud": {"#8EA6FF": "#A66BFF"}}         # the cloud's three blocks: violet, gold, mint
+
+
+def _neon(name: str, text: str) -> str:
+    swap = {**NEON, **NEON_SCENE.get(name, {})}
+    return re.sub(r"#[0-9A-Fa-f]{6}\b", lambda m: swap.get(m.group(0).upper(), m.group(0)), text)
+
+
 def _svg_text(name: str) -> str:
     with open(os.path.join(ART_DIR, f"{name}.svg"), encoding="utf-8") as f:
-        text = f.read()
+        text = _neon(name, f.read())
     colors = {"blob": theme.color("primary_soft"),
               "shadow": "#000000" if theme.current() == "dark" else "#1B2540"}
     text = text.replace("{{blob}}", colors["blob"]).replace("{{shadow}}", colors["shadow"])

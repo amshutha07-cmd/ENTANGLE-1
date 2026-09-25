@@ -9,9 +9,9 @@ import os
 from typing import Callable, Optional
 
 from PyQt6.QtCore import (
-    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QSize, Qt, QTimer, pyqtProperty, pyqtSignal,
+    QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtProperty, pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
     QBoxLayout, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
@@ -361,6 +361,13 @@ class NavButton(QPushButton):
 
     def paintEvent(self, e) -> None:
         super().paintEvent(e)
+        if self.isChecked():                              # the current page: a short neon bar at the left edge
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(theme.qcolor("primary"))
+            p.drawRoundedRect(QRectF(0, (self.height() - 18) / 2, 3, 18), 1.5, 1.5)
+            p.end()
         if not self._badge:
             return
         text = "99+" if self._badge > 99 else str(self._badge)
@@ -405,7 +412,6 @@ class Pill(QLabel):
 
 class Avatar(QWidget):
     """Round initials badge; the color is derived from the name so a person always looks the same."""
-    PALETTE = ["#5B7CFA", "#8B5CF6", "#EC4899", "#F59E0B", "#10B981", "#06B6D4", "#EF4444", "#84CC16"]
 
     def __init__(self, name: str = "?", size: int = 40, parent=None):
         super().__init__(parent)
@@ -419,11 +425,12 @@ class Avatar(QWidget):
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        idx = int(hashlib.md5(self._name.encode()).hexdigest(), 16) % len(self.PALETTE)
-        p.setBrush(QColor(self.PALETTE[idx]))
+        palette, ink = theme.avatar_colors()
+        idx = int(hashlib.md5(self._name.encode()).hexdigest(), 16) % len(palette)
+        p.setBrush(QColor(palette[idx]))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(0, 0, self._size, self._size)
-        p.setPen(QColor("#FFFFFF"))
+        p.setPen(QColor(ink))
         f = QFont(self.font())
         f.setBold(True)
         f.setPixelSize(int(self._size * 0.38))
@@ -460,7 +467,9 @@ class IconBadge(QLabel):
                           "danger": "danger", "info": "info", "neutral": "text_muted"}[self._kind])
         bg = theme.color({"primary": "primary_soft", "success": "success_soft", "warning": "warning_soft",
                           "danger": "danger_soft", "info": "info_soft", "neutral": "surface_alt"}[self._kind])
-        self.setStyleSheet(f"background: {bg}; border-radius: {self._size // 3}px;")
+        edge = QColor(fg)
+        self.setStyleSheet(f"background: {bg}; border-radius: {self._size // 3}px; "
+                           f"border: 1px solid rgba({edge.red()}, {edge.green()}, {edge.blue()}, 70);")
         self.setPixmap(icons.pixmap(self._name, fg, int(self._size * 0.5)))
 
     def set(self, name: str, kind: str) -> None:
@@ -475,6 +484,28 @@ class Card(QFrame):
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(padding, padding, padding, padding)
         self.body.setSpacing(spacing)
+
+    def paintEvent(self, e) -> None:
+        super().paintEvent(e)
+        if self.objectName() != "Card" or self.hasFocus() or (self.property("clickable") == "true" and self.underMouse()):
+            return                                        # hover and focus draw their own solid border
+        # a neon edge: mint at the top left fading out, violet at the bottom right
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        mint, violet, clear = theme.qcolor("primary"), theme.qcolor("accent"), theme.qcolor("primary")
+        mint.setAlphaF(0.34)
+        violet.setAlphaF(0.30)
+        clear.setAlphaF(0.0)
+        g.setColorAt(0.0, mint)
+        g.setColorAt(0.45, clear)
+        g.setColorAt(0.6, clear)
+        g.setColorAt(1.0, violet)
+        p.setPen(QPen(QBrush(g), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(r, theme.RADIUS - 0.5, theme.RADIUS - 0.5)
+        p.end()
 
 
 class ClickableCard(Card):
@@ -743,9 +774,9 @@ class Stepper(QWidget):
             p.setBrush(theme.qcolor("success") if done else theme.qcolor("primary_fill") if cur else theme.qcolor("surface_alt"))
             p.drawEllipse(QPoint(cx, cy), r, r)
             p.setFont(f)
-            p.setPen(QColor("#FFFFFF") if (done or cur) else theme.qcolor("text_faint"))
+            p.setPen(theme.qcolor("on_primary") if (done or cur) else theme.qcolor("text_faint"))
             if done:
-                p.drawPixmap(cx - 7, cy - 7, icons.pixmap("check", "#FFFFFF", 14, 2.6))
+                p.drawPixmap(cx - 7, cy - 7, icons.pixmap("check", theme.color("on_primary"), 14, 2.6))
             else:
                 p.drawText(cx - r, cy - r, 2 * r, 2 * r, Qt.AlignmentFlag.AlignCenter, str(i + 1))
             p.setPen(theme.qcolor("text") if cur else theme.qcolor("text_muted"))

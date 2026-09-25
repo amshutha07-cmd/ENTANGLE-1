@@ -6,7 +6,7 @@ import os
 from typing import Optional
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QMainWindow, QMenu, QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout,
     QWidget,
@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         brand.setContentsMargins(6, 0, 0, 14)
         brand.addWidget(IconBadge("shield", "primary", 36))
         name = label("A.N.Sx Vault", "h2", wrap=False)
+        name.setObjectName("Brand")                    # the neon wordmark (theme.py)
         brand.addWidget(name, 1)
         lay.addLayout(brand)
         self.nav: dict[str, NavButton] = {}
@@ -594,8 +595,8 @@ class MainWindow(QMainWindow):
         from ui.art import Illustration
         for w in self.findChildren(Illustration):         # background circle and shadow follow the theme
             w.retheme()
-        if self._tray:
-            self._tray.setIcon(QIcon(icons.pixmap("shield", theme.color("primary"), 32)))
+        if self._tray:                                     # the menu bar has its own light/dark, not the app's:
+            self._tray.setIcon(icons.app_icon())           # keep the dark tile, readable on either
         page = self.content.currentWidget()
         if self.root_stack.currentIndex() == 1 and page is not None:
             page.on_show()

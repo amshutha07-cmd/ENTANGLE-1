@@ -271,12 +271,26 @@ def test_every_text_colour_meets_wcag_aa_in_both_themes():
              ("text_faint", "bg"), ("text_faint", "surface"), ("text_faint", "surface_alt"),
              ("on_primary", "primary_fill"), ("on_primary", "primary_fill_hover"), ("on_primary", "primary_fill_pressed"),
              ("primary", "surface"), ("primary_on_soft", "primary_soft"),
-             ("success", "success_soft"), ("warning", "warning_soft"), ("danger", "danger_soft"), ("info", "info_soft")]
+             ("success", "success_soft"), ("warning", "warning_soft"), ("danger", "danger_soft"), ("info", "info_soft"),
+             # the far end of the primary button gradient, and ink on the other filled shapes (steps, danger hover)
+             ("on_primary", "primary_fill_end"), ("on_primary", "primary_fill_end_hover"),
+             ("on_primary", "primary_fill_end_pressed"), ("on_primary", "success"), ("on_primary", "danger"),
+             # sidebar and status bar text, monospace fingerprints on the alt card, text on a selected row
+             ("text_muted", "sidebar"), ("text_faint", "sidebar"), ("primary", "sidebar"), ("primary", "surface_alt"),
+             ("text", "primary_soft"), ("text_muted", "primary_soft")]
     low = [(name, fg, bg, round(_contrast(t[fg], t[bg]), 2)) for name, t in (("dark", DARK), ("light", LIGHT))
            for fg, bg in pairs if _contrast(t[fg], t[bg]) < 4.5]
     assert not low, f"text below 4.5:1: {low}"
     # and the soft highlight must still be visible against the card it sits on (not merged into it)
     assert _contrast(DARK["primary_soft"], DARK["surface"]) > 1.15 and _contrast(LIGHT["primary_soft"], LIGHT["surface"]) > 1.15
+
+
+def test_avatar_initials_are_readable_and_a_person_keeps_their_color():
+    from ui.theme import AVATARS
+    for name, (fills, ink) in AVATARS.items():
+        low = [(fill, round(_contrast(ink, fill), 2)) for fill in fills if _contrast(ink, fill) < 4.5]
+        assert not low, f"{name}: initials below 4.5:1 on {low}"
+    assert len(AVATARS["dark"][0]) == len(AVATARS["light"][0])      # same slot in both themes
 
 
 def test_app_icon_comes_in_every_size_a_desktop_asks_for():
