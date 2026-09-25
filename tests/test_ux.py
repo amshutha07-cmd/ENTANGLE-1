@@ -538,3 +538,71 @@ def test_remove_dialog_defaults(monkeypatch):
     assert confirm_remove(None, "a.pdf", 7, ["sam"]) is False                          # sam waiting: unticked
     assert "sam has not picked it up" in " ".join(l.text() for l in seen[-1].findChildren(__import__("PyQt6.QtWidgets", fromlist=["QLabel"]).QLabel))
     assert confirm_remove(None, "a.pdf", 0, []) is False and not seen[-1].findChildren(QCheckBox)   # nothing in cloud
+
+
+def _batch_setup(ctl, win, monkeypatch, fail=None):
+    from PyQt6.QtCore import Qt
+    from ui.controller import Job
+    key = SecurityCore.load_identity_for_user("ux_user")["public_key"]
+    for n in ("amy_b", "ben_b"):
+        SecurityCore.pin_discovered_contact(n, key, "relay")
+    e1 = VaultLedger.add_entry("one.pdf", "/x/1.png", "2026-09-25 09:00:00", size=100, storage={}, owner="ux_user")
+    e2 = VaultLedger.add_entry("two.pdf", "/x/2.png", "2026-09-25 09:00:00", size=200, storage={}, owner="ux_user")
+    sends = []
+
+    def make_send_job(entry, person):
+        def work(progress, cancelled):
+            if fail and (entry["original_filename"], person) == fail:
+                raise __import__("vault_service").VaultError("That person is not registered on this relay yet.")
+            sends.append((entry["original_filename"], person))
+            return {"id": f"t{len(sends)}", "to": person}
+        return Job(work, "send")
+    monkeypatch.setattr(ctl, "make_send_job", make_send_job)
+    sp = win.pages["send"]
+    win.go("send")
+    sp._fill_files()
+    for i in range(sp.files.count()):
+        if sp.files.item(i).data(Qt.ItemDataRole.UserRole) in (e1["id"], e2["id"]):
+            sp.files.item(i).setSelected(True)
+    assert sp.next_btn.text() == "Continue with 2 files"
+    sp._refresh_people = lambda: None
+    sp._next()
+    sp._fill_people()
+    for i in range(sp.people.count()):
+        if sp.people.item(i).data(Qt.ItemDataRole.UserRole) in ("amy_b", "ben_b"):
+            sp.people.item(i).setSelected(True)
+    assert sp.next_btn.text() == "Continue with 2 people"
+    sp._next()
+    return sp, sends
+
+
+def test_several_files_to_several_people(signed_in, monkeypatch):
+    ctl, win = signed_in
+    sp, sends = _batch_setup(ctl, win, monkeypatch)
+    assert sp.step == 2 and "one.pdf" in sp.rv_file.value.text() and "two.pdf" in sp.rv_file.value.text()
+    assert sp.rv_file.key_label.text() == "Files" and sp.rv_size.value.text() == "300 B"
+    assert sp.rv_pill.text() == "0 of 2 verified" and not sp.rv_fp.isVisible()       # no single fingerprint
+    assert "(4 sends)" in sp.send_btn.text() and "amy_b" in sp.trust_banner._text.text()
+    sp._send()
+    assert _wait(lambda: sp._job is None and not sp._batch)
+    assert sorted(sends) == sorted([(f, p) for f in ("one.pdf", "two.pdf") for p in ("amy_b", "ben_b")])
+    assert sp.done.isVisible() and sp.done_title.text().startswith("Sent to amy_b, ben_b")
+    assert ctl.sent_file_name("t1") in ("one.pdf", "two.pdf")                          # Sent list will name them
+
+
+def test_one_failed_send_does_not_stop_the_batch(signed_in, monkeypatch):
+    ctl, win = signed_in
+    sp, sends = _batch_setup(ctl, win, monkeypatch, fail=("one.pdf", "ben_b"))
+    sp._send()
+    assert _wait(lambda: sp._job is None and not sp._batch)
+    assert len(sends) == 3 and sp.done_title.text() == "Sent 3 of 4"
+    assert "one.pdf to ben_b" in sp.done_text.text() and "not registered" in sp.done_text.text()
+
+
+def test_cancel_stops_the_rest_of_the_batch(signed_in, monkeypatch):
+    ctl, win = signed_in
+    sp, sends = _batch_setup(ctl, win, monkeypatch)
+    sp._batch = [("x", "y"), ("x", "z")]
+    sp._batch_done = [("one.pdf", "amy_b")]
+    sp._batch_cancelled()
+    assert sp._batch == [] and sp.review.isVisible()

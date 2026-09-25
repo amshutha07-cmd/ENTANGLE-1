@@ -96,6 +96,8 @@ def main() -> int:
     instance = single_instance.server_name(paths.vault_home())
     if single_instance.notify_running(instance):         # already open: that window comes to the front instead
         return 0
+    import support
+    support.enable_file_logging()                         # <vault>/logs/app.log, secrets removed as it is written
     from ui import icons
     app.setWindowIcon(icons.app_icon())                   # Dock / taskbar / window icon (not the Python rocket)
 

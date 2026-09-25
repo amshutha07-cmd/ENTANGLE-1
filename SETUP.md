@@ -80,6 +80,10 @@ python3 run_relay.py --tailscale --install-autostart    # starts now and at ever
 python3 run_relay.py --remove-autostart                 # undo
 ```
 
+On a Mac, if this folder is on your Desktop, in Documents or Downloads (which macOS does not let login items read), the
+relay runs from a copy in `~/Library/Application Support/ANSX Relay` with its own data folder; run the command again
+after updating the app to refresh that copy.
+
 The log is in `~/Library/Logs/ANSX Relay/relay.log` on a Mac (Windows: `.ansx_vault\relay.log` in your user folder; Linux:
 `journalctl --user -u ansx-relay`). The relay is only reachable while this computer is on and awake.
 
@@ -187,6 +191,19 @@ Render's free tier has no persistent disk, so use a small VPS (Hetzner, DigitalO
 8. **Alice → Inbox → Sent** shows **Delivered**.
 9. **Break things on purpose**: unplug the network during an upload, reconnect, press **Resume sending**; have Bob press **Decline** and watch Alice's
    status change to *Declined*; press *Cancel this transfer* on a waiting transfer.
+
+---
+
+## Everyday use
+
+- **Closing the window keeps the app running** in the menu bar / system tray, so files still arrive and you get a
+  notification. It keeps receiving until it locks (Settings → Lock automatically). Quit from the tray icon or with
+  ⌘Q / Ctrl+Q. Prefer the old behaviour? Settings → *When you close the window* → *Quit the app*.
+- **Several files, several people:** on Send, hold ⌘ (Ctrl on Windows) or Shift to pick several files and several
+  people; each file goes to each person, one after another, with a summary at the end.
+- **Something wrong?** Settings → Security details → *Save a support report…* (or Help → Save a Support Report). It
+  saves a zip with app and system facts and the recent log. It has no keys, passphrases, file contents or storage
+  secrets; look through it before you share it.
 
 ---
 

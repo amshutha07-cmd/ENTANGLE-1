@@ -142,7 +142,9 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self._watcher)
         self._focus_visible = _FocusVisible(self)
         QApplication.instance().installEventFilter(self._focus_visible)
+        self._really_quit = False
         self._install_commands()
+        QApplication.instance().applicationStateChanged.connect(self._app_state_changed)
 
         if self.ctl.operator:                       # attached to a session that is already running: adopt its state
             self._session_started(self.ctl.operator)
@@ -228,11 +230,12 @@ class MainWindow(QMainWindow):
         menu.addAction("Open A.N.Sx Vault", self.bring_to_front)
         self._tray_lock = menu.addAction("Lock now", self._lock)
         menu.addSeparator()
-        menu.addAction("Quit", self.close)                # goes through the "transfer still running?" check
+        menu.addAction("Quit", self.quit_app)             # goes through the "transfer still running?" check
         menu.aboutToShow.connect(self._tray_menu_opening)
         tray.setContextMenu(menu)
         self._tray_menu = menu
         tray.activated.connect(self._tray_clicked)
+        tray.messageClicked.connect(self.bring_to_front)      # "New file from sam" clicked
         tray.show()
         return tray
 
@@ -259,7 +262,9 @@ class MainWindow(QMainWindow):
                 ("File", "Lock", "Ctrl+L", self._lock)]
         for i, (key, text, _icon) in enumerate(NAV, start=1):
             cmds.append(("Go", text, f"Ctrl+{i}", lambda _c=False, k=key: self._shortcut(k)))
+        cmds.append(("File", "Quit A.N.Sx Vault", "Ctrl+Q", self.quit_app))
         cmds += [("Help", "Keyboard Shortcuts", "", self._show_shortcuts),
+                 ("Help", "Save a Support Report…", "", self._support_report),
                  ("Help", "About A.N.Sx Vault", "", self._about)]
         return cmds
 
@@ -279,6 +284,8 @@ class MainWindow(QMainWindow):
                     act.setShortcut(QKeySequence(keys))
                 if label_text.startswith("About"):
                     act.setMenuRole(act.MenuRole.AboutRole)   # macOS moves it into the app menu
+                elif label_text.startswith("Quit"):
+                    act.setMenuRole(act.MenuRole.QuitRole)    # replaces the default ⌘Q, so it really quits
                 act.triggered.connect(fn)
             self._menus = menus
         else:                                             # Windows / Linux: keep the window free of a menu bar
@@ -296,6 +303,12 @@ class MainWindow(QMainWindow):
             self.go("settings")
             page = self.pages["settings"]
             page.ensureWidgetVisible(page.shortcuts_card)
+
+    def _support_report(self) -> None:
+        self.bring_to_front()
+        if self.root_stack.currentIndex() == 1:
+            self.go("settings")
+        self.pages["settings"].save_support_report()
 
     def _about(self) -> None:
         from ui import dialogs
@@ -588,7 +601,39 @@ class MainWindow(QMainWindow):
             page.on_show()
 
     # ── shutdown ─────────────────────────────────────────────────────────────
+    # ── closing the window: keep running in the tray, or really quit ─────────
+    def _keep_running(self, event) -> bool:
+        """Close button pressed (a spontaneous close) with a tray available and the setting on: hide, don't quit."""
+        return (not self._really_quit and self._tray is not None and bool(pref("close_to_tray", True))
+                and event.spontaneous())
+
+    def quit_app(self) -> None:
+        """Really quit (tray menu, ⌘Q / Ctrl+Q): locks, stops receiving, closes."""
+        self._really_quit = True
+        self.show()                                      # a hidden window must be closable to finish quitting
+        if not self.close():
+            self._really_quit = False                    # "Keep working" chosen while a transfer runs
+
+    def _into_background(self) -> None:
+        self._save_window_place()
+        self.hide()
+        if not pref("tray_hint_shown", False) and self._tray is not None:
+            set_pref("tray_hint_shown", True)
+            self._tray.showMessage(
+                "A.N.Sx Vault is still running",
+                "It keeps receiving and tells you when a file arrives (until it locks). Click the icon to open it, "
+                "or choose Quit from its menu.", QSystemTrayIcon.MessageIcon.Information, 8000)
+
+    def _app_state_changed(self, state) -> None:
+        """macOS: clicking the Dock icon while the window is hidden brings it back."""
+        if state == Qt.ApplicationState.ApplicationActive and self.isHidden() and not self._really_quit:
+            self.bring_to_front()
+
     def closeEvent(self, event) -> None:
+        if self._keep_running(event):
+            event.ignore()
+            self._into_background()
+            return
         if self.ctl.busy() and self.isVisible():
             from ui import dialogs
             if not dialogs.confirm(self, "Quit while a transfer is running?",

@@ -126,13 +126,23 @@ def port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+PUBLIC_DNS = ("https://1.1.1.1/dns-query", "https://dns.google/resolve")   # DNS-over-HTTPS, JSON answers
+
+
 def resolve_via_public_dns(host: str) -> str:
-    """Ask Cloudflare's public DNS (DNS-over-HTTPS) for the address, ignoring this computer's own resolver."""
-    req = urllib.request.Request(f"https://1.1.1.1/dns-query?name={host}&type=A", headers={"accept": "application/dns-json"})
-    with urllib.request.urlopen(req, timeout=8) as r:
-        for ans in json.loads(r.read()).get("Answer", []):
-            if ans.get("type") == 1:
-                return ans["data"]
+    """
+    The address the internet sees, from public DNS (ignoring this computer's own resolver). Asks more than one: a
+    resolver that looked the name up before it existed keeps answering "no such name" for a while.
+    """
+    for server in PUBLIC_DNS:
+        try:
+            req = urllib.request.Request(f"{server}?name={host}&type=A", headers={"accept": "application/dns-json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                for ans in json.loads(r.read()).get("Answer", []):
+                    if ans.get("type") == 1:
+                        return ans["data"]
+        except (OSError, ValueError):
+            continue
     return ""
 
 
@@ -232,7 +242,7 @@ class TailscaleFunnel:
             self.proc.terminate()
 
 
-def announce(url: str, save: bool, permanent: bool = False) -> None:
+def announce(url: str, save: bool, permanent: bool = False, background: bool = False) -> None:
     kind = "permanent address" if permanent else "address created"
     print(f"\n[tunnel] {kind}: {url}\n[tunnel] checking that it works from the internet…")
     end, works = time.time() + 90, False
@@ -261,7 +271,8 @@ def announce(url: str, save: bool, permanent: bool = False) -> None:
         except Exception as exc:                                  # never let this stop the relay
             print(f"  (Could not save the setting automatically: {exc})")
         if permanent:
-            write_bundled_address(url)
+            if not background:                             # a login item runs from a copy: nothing to bundle there
+                write_bundled_address(url)
     if not local_dns_ready(url):
         print("\n  NOTE: THIS computer has not learned the new name yet (common with free tunnels).")
         print("  Other computers and phones are usually fine. Here, wait 1-2 minutes, or flush the DNS cache:")
@@ -272,7 +283,8 @@ def announce(url: str, save: bool, permanent: bool = False) -> None:
         else:
             print("      sudo resolvectl flush-caches")
         print("  (Or set this computer's DNS servers to 1.1.1.1 and 8.8.8.8.)")
-    print("\n  Keep this window open. Press Ctrl+C to stop.\n")
+    print("\n  Running in the background; it starts again at every login.\n" if background
+          else "\n  Keep this window open. Press Ctrl+C to stop.\n")
 
 
 def write_bundled_address(url: str, root: str = ROOT) -> None:
@@ -298,10 +310,48 @@ def write_bundled_address(url: str, root: str = ROOT) -> None:
 
 
 # ── start at login ───────────────────────────────────────────────────────────────────────────────
-def autostart_command(args) -> list[str]:
+# macOS does not let programs started at login read Desktop, Documents or Downloads (or iCloud Drive) until someone
+# clicks "Allow" in a prompt: the relay would just hang at startup. From there, a copy of the few files the relay needs
+# (and its data) is installed in ~/Library/Application Support/ANSX Relay instead.
+_MAC_PROTECTED = ("Desktop", "Documents", "Downloads", os.path.join("Library", "Mobile Documents"))
+RELAY_FILES = ("run_relay.py", "relay_config.py", "paths.py")          # + the relay/ package
+
+
+def in_protected_folder(path: str) -> bool:
+    if platform.system() != "Darwin":
+        return False
+    home = os.path.realpath(os.path.expanduser("~"))
+    p = os.path.realpath(path)
+    return any(p == os.path.join(home, d) or p.startswith(os.path.join(home, d) + os.sep) for d in _MAC_PROTECTED)
+
+
+def login_home() -> str:
+    return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "ANSX Relay")
+
+
+def stage_for_login(args) -> tuple[str, str]:
+    """Copy the relay out of a protected folder. Returns (script, data folder). Existing relay data is copied once."""
+    app_dir, data_dir = os.path.join(login_home(), "app"), os.path.join(login_home(), "data")
+    os.makedirs(app_dir, exist_ok=True)
+    for name in RELAY_FILES:
+        shutil.copy2(os.path.join(ROOT, name), os.path.join(app_dir, name))
+    pkg = os.path.join(app_dir, "relay")
+    if os.path.isdir(pkg):
+        shutil.rmtree(pkg)                                # always the current version of the server
+    shutil.copytree(os.path.join(ROOT, "relay"), pkg, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    src_data = os.path.abspath(args.data)
+    if not os.path.exists(data_dir):
+        if os.path.isdir(src_data):
+            shutil.copytree(src_data, data_dir)           # keep registered names and files waiting to be picked up
+        else:
+            os.makedirs(data_dir)
+    return os.path.join(app_dir, "run_relay.py"), data_dir
+
+
+def autostart_command(args, script: str = "", data: str = "") -> list[str]:
     """The command that login should run: this script with the same options, marked as an automatic start."""
-    cmd = [python_for_autostart(), os.path.join(ROOT, "run_relay.py"), "--port", str(args.port), "--host", args.host,
-           "--data", os.path.abspath(args.data), "--autostart"]
+    cmd = [python_for_autostart(), script or os.path.join(ROOT, "run_relay.py"), "--port", str(args.port),
+           "--host", args.host, "--data", data or os.path.abspath(args.data), "--autostart"]
     cmd += ["--tunnel"] if args.tunnel else ["--tailscale"] if args.tailscale else []
     cmd += ["--no-save"] if args.no_save else []
     return cmd
@@ -325,7 +375,7 @@ def autostart_log() -> str:
 
 def launchd_plist(cmd: list[str], log: str, path_env: str) -> bytes:
     return plistlib.dumps({
-        "Label": AUTOSTART_LABEL, "ProgramArguments": cmd, "WorkingDirectory": ROOT,
+        "Label": AUTOSTART_LABEL, "ProgramArguments": cmd, "WorkingDirectory": os.path.dirname(cmd[1]),
         "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,        # restarted if it ever stops
         "StandardOutPath": log, "StandardErrorPath": log,
         "EnvironmentVariables": {"PATH": path_env},       # login items get a bare PATH: keep tailscale/cloudflared findable
@@ -349,21 +399,41 @@ def _launchd_paths() -> tuple[str, str]:
     return agent, f"gui/{os.getuid()}"
 
 
+def _wait_until_unloaded(domain: str, seconds: float = 15) -> None:
+    """launchd stops a running job asynchronously; registering it again before it is gone fails with error 5."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if subprocess.run(["launchctl", "print", f"{domain}/{AUTOSTART_LABEL}"], capture_output=True).returncode != 0:
+            return
+        time.sleep(0.5)
+
+
 def _systemd_path() -> str:
     return os.path.join(os.path.expanduser("~"), ".config", "systemd", "user", "ansx-relay.service")
 
 
 def install_autostart(args) -> int:
-    cmd, log, system = autostart_command(args), autostart_log(), platform.system()
+    staged = in_protected_folder(ROOT)
+    if staged:
+        script, data = stage_for_login(args)
+        cmd = autostart_command(args, script, data)
+    else:
+        cmd = autostart_command(args)
+    log, system = autostart_log(), platform.system()
     os.makedirs(os.path.dirname(log), exist_ok=True)
     path_env = os.environ.get("PATH", "")
     if system == "Darwin":
         agent, domain = _launchd_paths()
         os.makedirs(os.path.dirname(agent), exist_ok=True)
         subprocess.run(["launchctl", "bootout", f"{domain}/{AUTOSTART_LABEL}"], capture_output=True)   # replace an old one
+        _wait_until_unloaded(domain)
         with open(agent, "wb") as f:
             f.write(launchd_plist(cmd, log, path_env))
-        r = subprocess.run(["launchctl", "bootstrap", domain, agent], capture_output=True, text=True)
+        for attempt in range(5):                           # "Bootstrap failed: 5" while an old copy is still stopping
+            r = subprocess.run(["launchctl", "bootstrap", domain, agent], capture_output=True, text=True)
+            if r.returncode == 0:
+                break
+            time.sleep(1.5)
     elif system == "Linux":
         unit = _systemd_path()
         os.makedirs(os.path.dirname(unit), exist_ok=True)
@@ -381,6 +451,9 @@ def install_autostart(args) -> int:
           + (" (and it has been started now)." if system != "Windows" else " (from your next login)."))
     print(f"  runs:  {subprocess.list2cmdline(cmd)}\n  log:   {log if system != 'Linux' else 'journalctl --user -u ansx-relay'}")
     print("  undo:  python run_relay.py --remove-autostart")
+    if staged:
+        print(f"  (This folder is protected by macOS, so the relay runs from a copy in {login_home()},\n"
+              "   with its own data folder. After updating the app, run this command again to refresh the copy.)")
     return 0
 
 
@@ -480,11 +553,12 @@ def main() -> int:
     tunnel = None
     if args.tunnel:
         print("Opening a free public tunnel (takes a few seconds)…")
-        tunnel = Tunnel(args.port, lambda u: announce(u, save=not args.no_save))
+        tunnel = Tunnel(args.port, lambda u: announce(u, save=not args.no_save, background=args.autostart))
         tunnel.start()
     elif args.tailscale:
         print(f"Publishing {ts_url} with Tailscale Funnel…")
-        tunnel = TailscaleFunnel(ts_exe, args.port, ts_url, lambda u: announce(u, save=not args.no_save, permanent=True))
+        tunnel = TailscaleFunnel(ts_exe, args.port, ts_url,
+                                 lambda u: announce(u, save=not args.no_save, permanent=True, background=args.autostart))
         tunnel.start()
     else:
         print("No tunnel: only this computer (and your local network, with --host 0.0.0.0) can reach it.")

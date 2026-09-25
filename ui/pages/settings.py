@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 import engine
@@ -129,6 +129,17 @@ class SettingsPage(Page):
         r.addWidget(self.lock_combo)
         app.body.addLayout(r)
         r = QHBoxLayout()
+        r.addWidget(label("When you close the window", "body", wrap=False), 1)
+        self.close_combo = QComboBox()
+        self.close_combo.addItem("Keep running in the background", True)
+        self.close_combo.addItem("Quit the app", False)
+        self.close_combo.currentIndexChanged.connect(self._close_picked)
+        r.addWidget(self.close_combo)
+        app.body.addLayout(r)
+        self.close_note = label("In the background it keeps receiving files and tells you when one arrives, until it "
+                                "locks (see “Lock automatically”). Quit from the tray / menu bar icon.", "muted")
+        app.body.addWidget(self.close_note)
+        r = QHBoxLayout()
         motion_label = label("Animations", "body", wrap=False)
         motion_label.setToolTip("Short fades and slides that show what changed. Choose “Reduced” if motion bothers you.")
         r.addWidget(motion_label, 1)
@@ -168,7 +179,19 @@ class SettingsPage(Page):
         sec.body.addWidget(self.sec_data)
         opn = Button("Open data folder", "ghost", "folder", "sm")
         opn.clicked.connect(lambda: open_folder(paths.vault_home()))
-        sec.body.addWidget(opn, 0, Qt.AlignmentFlag.AlignLeft)
+        report = Button("Save a support report…", "ghost", "download", "sm")
+        report.setToolTip("A zip with app and system facts and the recent log, for someone helping you. "
+                          "No keys, passphrases, file contents or storage secrets.")
+        report.clicked.connect(self.save_support_report)
+        tools = QHBoxLayout()
+        tools.addWidget(opn)
+        tools.addWidget(report)
+        tools.addStretch()
+        sec.body.addLayout(tools)
+        self.report_msg = Banner("", "success", "Show in folder", lambda: open_folder(self._report_path))
+        self.report_msg.hide()
+        self._report_path = ""
+        sec.body.addWidget(self.report_msg)
         self.root.addWidget(sec)
         self.root.addStretch(1)
 
@@ -190,6 +213,8 @@ class SettingsPage(Page):
         idx = max(0, self.lock_combo.findData(mins))
         self.lock_combo.setCurrentIndex(idx)
         self.motion_combo.setCurrentIndex(1 if pref("reduce_motion", False) else 0)
+        self.close_combo.setCurrentIndex(0 if pref("close_to_tray", True) else 1)
+        self.close_note.setVisible(bool(pref("close_to_tray", True)))
         try:
             backend = platform_secret.backend_name()
         except Exception:
@@ -277,6 +302,41 @@ class SettingsPage(Page):
         if self._loading:
             return
         self.theme_changed.emit(self.theme_combo.currentData())
+
+    def save_support_report(self, path: str = "") -> str:
+        """Ask where, then write the support report there. Returns the path ("" if cancelled or failed)."""
+        import datetime
+        import os
+        import support
+        from PyQt6.QtWidgets import QFileDialog
+        if not path:
+            default = os.path.join(paths.downloads_dir(),
+                                   f"ansx-support-{datetime.datetime.now():%Y%m%d-%H%M}.zip")
+            path, _ = QFileDialog.getSaveFileName(self, "Save a support report", default, "Zip files (*.zip)")
+            if not path:
+                return ""
+        try:
+            from ui.main_window import APP_VERSION
+            support.build_report(path, APP_VERSION, self.ctl.relay_state)
+        except OSError as exc:
+            self.report_msg.set(f"Could not save the report: {exc}", "danger")
+            self.report_msg._btn.hide()
+            motion.reveal(self.report_msg)
+            return ""
+        self._report_path = path
+        self.report_msg.set("Saved. It has no keys, passphrases, file contents or storage secrets. Its log can mention "
+                            "the names of people you exchanged files with: look through it before you share it.",
+                            "success")
+        self.report_msg._btn.show()
+        motion.reveal(self.report_msg)
+        return path
+
+    def _close_picked(self) -> None:
+        if self._loading:
+            return
+        keep = bool(self.close_combo.currentData())
+        set_pref("close_to_tray", keep)
+        self.close_note.setVisible(keep)
 
     def _motion_picked(self) -> None:
         if self._loading:

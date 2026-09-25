@@ -615,7 +615,7 @@ class KeyValue(QWidget):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 2, 0, 2)
-        k = label(key, "muted", wrap=False)
+        k = self.key_label = label(key, "muted", wrap=False)
         k.setMinimumWidth(key_width)
         self.value = label(value, "mono" if mono else "body", selectable=True)
         lay.addWidget(k, 0, Qt.AlignmentFlag.AlignTop)

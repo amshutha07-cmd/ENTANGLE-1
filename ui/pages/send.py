@@ -34,6 +34,9 @@ def _fit_rows(lst, most: int = 6, row: int = 62) -> None:
     lst.setMaximumHeight(h)
 
 
+_MOD = "⌘" if __import__("sys").platform == "darwin" else "Ctrl"
+
+
 class SendPage(Page):
     navigate = pyqtSignal(str)
 
@@ -42,6 +45,11 @@ class SendPage(Page):
         self.entry_id: Optional[str] = None
         self.recipient: Optional[str] = None
         self._recipient_preset = False                       # person chosen first (People / Inbox)
+        self.entry_ids: list[str] = []                        # several files / people chosen at once
+        self.recipients: list[str] = []
+        self._batch: list = []                                # (entry, person) still to send
+        self._batch_done: list = []
+        self._batch_failed: list = []
         self.step = 0
         self._job: Optional[Job] = None
 
@@ -73,10 +81,13 @@ class SendPage(Page):
         self.file_search.hide()                          # only worth having once the list is long
         l0.addWidget(self.file_search)
         self.files = QListWidget()
+        self.files.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)   # ⌘/Ctrl or Shift: several
         self.files.itemSelectionChanged.connect(self._file_picked)
         self.files.itemDoubleClicked.connect(lambda _i: self._next())
         on_enter(self.files, self._next)
         l0.addWidget(self.files)
+        self.files_hint = label(f"Tip: hold {_MOD} or Shift to choose several files.", "faint")
+        l0.addWidget(self.files_hint)
         self.files_empty = EmptyState("shield", "Nothing to send yet",
                                       "Choose a file: it is protected first, then you pick who gets it.",
                                       "Choose a file…", self._pick_new_file)
@@ -109,10 +120,13 @@ class SendPage(Page):
         self.search.textChanged.connect(self._fill_people)
         l1.addWidget(self.search)
         self.people = QListWidget()
+        self.people.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.people.itemSelectionChanged.connect(self._person_picked)
         self.people.itemDoubleClicked.connect(lambda _i: self._next())
         on_enter(self.people, self._next)
         l1.addWidget(self.people)
+        self.people_hint = label(f"Tip: hold {_MOD} or Shift to send to several people.", "faint")
+        l1.addWidget(self.people_hint)
         self.people_empty = EmptyState("users", "No one here yet",
                                        "Press “Refresh people” to look them up. They need to have opened the app at least once.")
         l1.addWidget(self.people_empty)
@@ -149,7 +163,8 @@ class SendPage(Page):
         rl.addWidget(self.rv_file)
         rl.addWidget(self.rv_size)
         rl.addLayout(who)
-        rl.addWidget(label("Their key fingerprint:", "muted"))
+        self.rv_fp_label = label("Their key fingerprint:", "muted")
+        rl.addWidget(self.rv_fp_label)
         self.rv_fp = Fingerprint()
         rl.addWidget(self.rv_fp)
         self.trust_banner = Banner("", "warning", "I verified it", self._verify_now)
@@ -224,6 +239,7 @@ class SendPage(Page):
 
     def reset(self) -> None:
         self.entry_id = self.recipient = None
+        self.entry_ids, self.recipients = [], []
         self._recipient_preset = False
         self.files_heading.setText("Which file do you want to send?")
         self._job = None
@@ -239,6 +255,7 @@ class SendPage(Page):
         """Start sending to `name` (from People & keys, or replying to an inbox item): pick a file, then review."""
         self.reset()
         self.recipient = name
+        self.recipients = [name]
         self._recipient_preset = True
         self._fill_people()
         self.files_heading.setText(f"Which file should {name} get?")
@@ -248,6 +265,7 @@ class SendPage(Page):
         """Called from the Protect page's Send button: skip straight to choosing a person."""
         self.reset()
         self.entry_id = entry_id
+        self.entry_ids = [entry_id]
         self._fill_files()
         self._go(1)
 
@@ -267,8 +285,10 @@ class SendPage(Page):
             self.files.setItemWidget(it, ListRow(e["original_filename"], f"{human_size(e.get('size'))} · {friendly_date(e['date_vaulted'])}",
                                                    icon=file_icon(e["original_filename"])[0],
                                                    icon_kind=file_icon(e["original_filename"])[1]))
-            if e["id"] == self.entry_id:
-                self.files.setCurrentItem(it)
+            if e["id"] == self.entry_id or e["id"] in self.entry_ids:
+                it.setSelected(True)
+                if e["id"] == self.entry_id:
+                    self.files.setCurrentItem(it, self.files.selectionModel().SelectionFlag.Select)
         self.files.blockSignals(False)
         _fit_rows(self.files)
         self.files.setVisible(bool(entries))
@@ -305,8 +325,10 @@ class SendPage(Page):
             if c["operator"] in last:
                 sub += f" · you last sent them a file {time_ago(last[c['operator']])}"
             self.people.setItemWidget(it, ListRow(c["operator"], sub, avatar=c["operator"], right=[Pill(text, kind)]))
-            if c["operator"] == self.recipient:
-                self.people.setCurrentItem(it)
+            if c["operator"] == self.recipient or c["operator"] in self.recipients:
+                it.setSelected(True)
+                if c["operator"] == self.recipient:
+                    self.people.setCurrentItem(it, self.people.selectionModel().SelectionFlag.Select)
         self.people.blockSignals(False)
         have = bool(contacts)
         _fit_rows(self.people)
@@ -328,12 +350,14 @@ class SendPage(Page):
 
     def _file_picked(self) -> None:
         items = self.files.selectedItems()
-        self.entry_id = items[0].data(Qt.ItemDataRole.UserRole) if items else None
+        self.entry_ids = [i.data(Qt.ItemDataRole.UserRole) for i in items]
+        self.entry_id = self.entry_ids[0] if self.entry_ids else None
         self._update_nav()
 
     def _person_picked(self) -> None:
         items = self.people.selectedItems()
-        self.recipient = items[0].data(Qt.ItemDataRole.UserRole) if items else None
+        self.recipients = [i.data(Qt.ItemDataRole.UserRole) for i in items]
+        self.recipient = self.recipients[0] if self.recipients else None
         self._update_nav()
 
     # ── wizard navigation ────────────────────────────────────────────────────
@@ -371,6 +395,7 @@ class SendPage(Page):
             self.ctl.toast.emit("Some pieces could not reach your cloud storage, so they travel inside the package. "
                                 "Check your storage in Settings.", "warning")
         self.entry_id = res.entry["id"]
+        self.entry_ids = [self.entry_id]
         self._fill_files()
         self._next()                                        # straight on to "Choose a person"
 
@@ -395,11 +420,25 @@ class SendPage(Page):
             self._fill_review()
         self._update_nav()
 
+    def _chosen_files(self) -> list[str]:
+        ids = [i for i in self.entry_ids if i]
+        return ids if len(ids) > 1 else ([self.entry_id] if self.entry_id else [])
+
+    def _chosen_people(self) -> list[str]:
+        names = [n for n in self.recipients if n]
+        return names if len(names) > 1 else ([self.recipient] if self.recipient else [])
+
     def _update_nav(self) -> None:
         if self.step == 0:
-            self.next_btn.setEnabled(bool(self.entry_id) and self._job is None)
+            n = len(self._chosen_files())
+            self.next_btn.setEnabled(n > 0 and self._job is None)
+            self.next_btn.setText(f"Continue with {n} files" if n > 1 else "Continue")
         elif self.step == 1:
-            self.next_btn.setEnabled(bool(self.recipient))
+            n = len(self._chosen_people())
+            self.next_btn.setEnabled(n > 0)
+            self.next_btn.setText(f"Continue with {n} people" if n > 1 else "Continue")
+        self.files_hint.setVisible(self.files.count() > 1)
+        self.people_hint.setVisible(self.people.count() > 1)
 
     def _back(self) -> None:
         if self._job is None:
@@ -431,6 +470,12 @@ class SendPage(Page):
         self.progress.finish()
         self.review.show()
         self.back_btn.setEnabled(True)
+        if self._is_batch():
+            self._fill_batch_review()
+            return
+        for w in (self.rv_fp_label, self.rv_fp):
+            w.show()
+        self.rv_file.key_label.setText("File")
         entry = VaultLedger.get(self.entry_id or "")
         info = None
         if self.recipient:
@@ -455,12 +500,45 @@ class SendPage(Page):
             self.trust_banner._btn.show()
         self.send_btn.setText("Resume sending" if self.ctl.has_pending_upload(self.entry_id, self.recipient) else "Send securely")
 
+    def _is_batch(self) -> bool:
+        return len(self._chosen_files()) > 1 or len(self._chosen_people()) > 1
+
+    def _fill_batch_review(self) -> None:
+        """Several files and/or people: one summary instead of one fingerprint."""
+        entries = [e for e in (VaultLedger.get(i) for i in self._chosen_files()) if e]
+        people = self._chosen_people()
+        names = [e["original_filename"] for e in entries]
+        self.rv_file.key_label.setText("Files" if len(names) > 1 else "File")
+        self.rv_file.set(", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else ""))
+        self.rv_size.set(human_size(sum(e.get("size") or 0 for e in entries)))
+        self.rv_avatar.set_name(people[0] if people else "?")
+        self.rv_name.setText(", ".join(people[:3]) + (f" and {len(people) - 3} more" if len(people) > 3 else ""))
+        unverified = [p for p in people if self.ctl.trust(p) != "verified"]
+        ok = len(people) - len(unverified)
+        self.rv_pill.set(f"{ok} of {len(people)} verified" if len(people) > 1 else
+                         TRUST_PILL[self.ctl.trust(people[0])][0], "success" if not unverified else "warning")
+        for w in (self.rv_fp_label, self.rv_fp):              # one fingerprint cannot describe several people
+            w.hide()
+        self.trust_banner._btn.hide()
+        if not unverified:
+            self.trust_banner.set("You verified everyone's key, so only they can open these files.", "success")
+        else:
+            who = ", ".join(unverified[:3]) + (f" and {len(unverified) - 3} more" if len(unverified) > 3 else "")
+            self.trust_banner.set(f"Not verified yet: {who}. If these files are sensitive, compare fingerprints in "
+                                  "People & keys first.", "warning")
+        n = len(entries) * len(people)
+        self.send_btn.setText(f"Send {len(entries)} file{'s' if len(entries) != 1 else ''} to "
+                              f"{len(people)} {'people' if len(people) != 1 else 'person'} ({n} sends)")
+
     def _verify_now(self) -> None:
         if self.recipient and verify_fingerprint(self, self.recipient, self.rv_fp.raw()):
             self.ctl.verify_contact(self.recipient)
             self._fill_review()
 
     def _send(self) -> None:
+        if self._is_batch():
+            self._send_batch()
+            return
         entry = VaultLedger.get(self.entry_id or "")
         if not entry or not self.recipient or self._job is not None:
             return
@@ -510,6 +588,89 @@ class SendPage(Page):
         self.review.show()
         self.back_btn.setEnabled(True)
         self.ctl.toast.emit("Sending cancelled. Nothing was delivered.", "info")
+
+    # ── several files to several people: one send after another ───────────────
+    def _send_batch(self) -> None:
+        if self._job is not None:
+            return
+        entries = [e for e in (VaultLedger.get(i) for i in self._chosen_files()) if e]
+        self._batch = [(e, p) for e in entries for p in self._chosen_people()]
+        self._batch_done, self._batch_failed, self._batch_total = [], [], len(self._batch)
+        if not self._batch:
+            return
+        self.error.hide()
+        self.review.hide()
+        self.back_btn.setEnabled(False)
+        self.stepper.clickable = False
+        self._batch_next()
+
+    def _batch_next(self) -> None:
+        entry, person = self._batch.pop(0)
+        n = len(self._batch_done) + len(self._batch_failed) + 1
+        self.progress.start(f"Sending {n} of {self._batch_total}: {entry['original_filename']} to {person}")
+        try:
+            job = self.ctl.make_send_job(entry, person)
+        except Exception as exc:
+            self._batch_failed_one(entry, person, str(exc))
+            return
+        self._job = job
+        self.ctl.run_job(job, on_success=lambda r, e=entry: self._batch_sent_one(e, r),
+                         on_fail=lambda m, e=entry, p=person: self._batch_failed_one(e, p, m),
+                         on_cancel=self._batch_cancelled,
+                         on_progress=lambda text, pct: self.progress.update_progress(text, pct))
+
+    def _batch_sent_one(self, entry: dict, result: dict) -> None:
+        self._job = None
+        self.ctl.after_send(entry, result["to"], result.get("id", ""))
+        self._batch_done.append((entry["original_filename"], result["to"]))
+        self._batch_continue()
+
+    def _batch_failed_one(self, entry: dict, person: str, message: str) -> None:
+        self._job = None
+        self._batch_failed.append((entry["original_filename"], person, message))
+        self._batch_continue()
+
+    def _batch_continue(self) -> None:
+        if self._batch:                                     # one failure does not stop the others
+            self._batch_next()
+            return
+        self.progress.finish()
+        done, failed = self._batch_done, self._batch_failed
+        if not done:                                        # nothing went: back to the review with the reason
+            self.stepper.clickable = True
+            self.review.show()
+            self.back_btn.setEnabled(True)
+            self.error.set(f"Nothing was sent. {failed[0][2]}", "danger")
+            motion.reveal(self.error)
+            return
+        people = sorted({p for _f, p in done})
+        self.done_title.setText(f"Sent {len(done)} of {self._batch_total}" if failed else
+                                f"Sent to {', '.join(people[:3])}" + (" and more" if len(people) > 3 else ""))
+        text = f"{len(done)} send{'s' if len(done) != 1 else ''} are waiting in people's inboxes. You'll get a " \
+               "notification as each is accepted."
+        if failed:
+            why = "; ".join(f"{f} to {p}: {m}" for f, p, m in failed[:3]) + ("; …" if len(failed) > 3 else "")
+            text += f" Not sent: {why}. Send those again when the problem is fixed."
+        self.done_text.setText(text)
+        motion.reveal(self.done, motion.SLOW)
+        self.stepper.set_current(3)
+        self.stepper.clickable = False
+        self.next_btn.hide()
+        self.back_btn.hide()
+        self.notify_if_away(f"Sent {len(done)} of {self._batch_total}." if failed else f"Sent {len(done)} files.",
+                            "warning" if failed else "success")
+
+    def _batch_cancelled(self) -> None:
+        left = len(self._batch)
+        self._batch = []
+        self._job = None
+        self.progress.finish()
+        self.stepper.clickable = True
+        self.review.show()
+        self.back_btn.setEnabled(True)
+        sent = len(self._batch_done)
+        self.ctl.toast.emit(f"Stopped. {sent} sent, {left + 1} not sent." if sent else "Sending cancelled. Nothing was "
+                            "delivered.", "info")
 
     def _cancel(self) -> None:
         if self._job:
