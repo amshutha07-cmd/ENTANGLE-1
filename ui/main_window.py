@@ -34,8 +34,8 @@ NAV = [("home", "Home", "home"), ("vault", "Protect", "shield"), ("send", "Send"
 class _ActivityWatcher(QObject):
     """Resets the idle timer on any real user input."""
 
-    def __init__(self, on_activity):
-        super().__init__()
+    def __init__(self, on_activity, parent=None):
+        super().__init__(parent)
         self._cb = on_activity
 
     def eventFilter(self, obj, ev):
@@ -136,9 +136,11 @@ class MainWindow(QMainWindow):
         self._idle_warn = QTimer(self)                 # a heads-up shortly before locking
         self._idle_warn.setSingleShot(True)
         self._idle_warn.timeout.connect(self._idle_warning)
-        self._watcher = _ActivityWatcher(self._activity)
+        # App-wide event filters are children of this window, so Qt removes them when the window goes. Unowned, they
+        # outlived it and kept calling into a deleted window on every click (a crash).
+        self._watcher = _ActivityWatcher(self._activity, self)
         QApplication.instance().installEventFilter(self._watcher)
-        self._focus_visible = _FocusVisible()
+        self._focus_visible = _FocusVisible(self)
         QApplication.instance().installEventFilter(self._focus_visible)
         self._install_commands()
 

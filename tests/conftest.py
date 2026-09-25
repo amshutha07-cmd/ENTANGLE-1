@@ -51,3 +51,22 @@ def _no_background_jobs_left_behind():
     except Exception:                                   # tests that never touch the UI
         return
     wait_for_all_jobs()
+    _delete_windows_now()
+
+
+def _delete_windows_now():
+    """
+    Delete the windows a test made, at a controlled moment. Left to Python's garbage collector, a window can be
+    destroyed in the middle of Qt delivering an event to it, which crashes the process. (The app itself keeps one
+    window for its whole life; only tests create and drop many.)
+    """
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        w.hide()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()

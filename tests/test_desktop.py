@@ -80,3 +80,20 @@ def test_mac_menu_bar_holds_the_commands(monkeypatch):
                 if s.context() == Qt.ShortcutContext.WindowShortcut]                   # not also bound on the window
     about = [a for a in win._menus["Help"].actions() if a.text().startswith("About")][0]
     assert about.menuRole() == about.MenuRole.AboutRole                            # lives in the app menu on macOS
+
+
+def test_a_closed_window_leaves_nothing_listening():
+    """App-wide event filters belong to their window: once it is gone, a click anywhere must not reach them."""
+    from PyQt6.QtCore import QCoreApplication, QEvent, Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QPushButton
+    from ui.main_window import MainWindow
+    win = MainWindow(AppController())
+    assert win._watcher.parent() is win and win._focus_visible.parent() is win
+    win.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    other = QPushButton("elsewhere")
+    other.show()
+    QTest.mouseClick(other, Qt.MouseButton.LeftButton)               # used to abort: a dead window's filter ran
+    QTest.keyClick(other, Qt.Key.Key_A)
+    other.close()
