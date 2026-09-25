@@ -66,6 +66,12 @@ def auto_confirm(monkeypatch):
 
     for mod in (ui.dialogs, a, c, i, s, st, v):
         monkeypatch.setattr(mod, "confirm", fake, raising=False)
+        monkeypatch.setattr(mod, "confirm_remove",
+                            lambda parent, name, n, waiting: (state["asked"].append("remove " + name) or False)
+                            if state["answer"] else None, raising=False)
+        monkeypatch.setattr(mod, "verify_fingerprint",
+                            lambda parent, name, fp: state["asked"].append("verify " + name) or state["answer"],
+                            raising=False)
     for mod in (c,):
         monkeypatch.setattr(mod, "info", lambda *a, **k: None, raising=False)
     return state
@@ -218,11 +224,13 @@ def test_full_user_journey_across_the_real_screens(env, auto_confirm, tmp_path, 
     bob = MainWindow(bob_ctl)
     bob.show()
     assert pump(lambda: len(bob_ctl.inbox) == 1, 25)
-    assert bob.nav["inbox"].text().endswith("1")                     # badge
+    assert bob.nav["inbox"].badge() == 1 and bob.nav["inbox"].accessibleName() == "Inbox, 1 waiting"   # badge
     bob.go("inbox")
     bi = bob.pages["inbox"]
     assert pump(lambda: bi.inbox_list.count() == 1 and bi._current is not None, 10)
-    assert bi.d_from.text() == "ui_carla" and "Not verified" in bi.d_pill.text()
+    # carla's key reaches bob's contacts through LAN discovery, which may or may not have happened yet: either way the
+    # sender is flagged as not verified ("New sender" before discovery, "Not verified" after) with a warning banner.
+    assert bi.d_from.text() == "ui_carla" and bi.d_pill.text() in ("Not verified", "New sender")
     assert bi.d_banner.property("kind") == "warning"
 
     # ── bob accepts ──
@@ -324,7 +332,7 @@ def test_contacts_screen_verifies_and_removes(env, auto_confirm):
     assert cp.d_pill.text() == "Not verified" and cp.verify_btn.isVisibleTo(cp)
     cp._verify()
     assert cp.d_pill.text() == "Verified" and not cp.verify_btn.isVisibleTo(cp)
-    assert "Confirm fingerprint" in auto_confirm["asked"]
+    assert "verify ui_gus" in auto_confirm["asked"]
     cp._remove()
     assert "ui_gus" not in [cp.list.item(i).data(0x100) for i in range(cp.list.count()) if cp.list.item(i).data(0x100)]
     a.logout()
@@ -417,50 +425,69 @@ def test_app_starts_with_no_relay_and_recovers(env, auto_confirm):
 def test_every_button_can_actually_be_clicked_even_with_toasts_showing(env, auto_confirm):
     """
     Regression: an invisible overlay once swallowed clicks on the right side of the window ("Add an account" did
-    nothing). This hit-tests, for every visible button on every page, that a real click lands on THAT button.
+    nothing). This hit-tests, for every visible button on every page, that a real click lands on THAT button. With
+    one notice showing (the everyday case) nothing may be in the way. With a full stack of four, a click may land on
+    a notice that is drawn right there (clicking it closes it), but never on empty space around or between them.
     """
     from PyQt6.QtCore import Qt
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QPushButton
+    from ui.widgets import _Toast
     ctl = _make_user("ui_jo", "jo long passphrase 4242")
     win = MainWindow(ctl)
     win.show()
-    ctl.begin_session("ui_jo")
-    assert pump(lambda: ctl.relay_state == "online", 20)
-    for kind in ("success", "warning", "error", "info"):            # a full stack of toasts on screen
-        ctl.toast.emit("A notification that is on screen while you work.", kind)
-    pump(timeout=0.3)
-    assert win.toasts.isVisible() and win.toasts.height() < 400      # sized to its contents, not the whole window
 
-    blocked = []
-    for key, page in win.pages.items():
-        win.go(key)
-        pump(timeout=0.2)
-        viewport = page.viewport().rect()
-        for b in page.findChildren(QPushButton):
-            if not b.isVisibleTo(page) or not b.isEnabled() or not b.isVisible():
-                continue
-            centre = b.mapTo(page.viewport(), b.rect().center())
-            if not viewport.contains(centre):
-                continue                                             # scrolled out of view; a user would scroll first
-            hit = win.childAt(b.mapTo(win, b.rect().center()))
-            ok = hit is b or (hit is not None and b.isAncestorOf(hit))
-            if not ok:
+    def unreachable(notices_may_cover: bool) -> list:
+        blocked = []
+        for key, page in win.pages.items():
+            win.go(key)
+            pump(timeout=0.2)
+            viewport = page.viewport().rect()
+            for b in page.findChildren(QPushButton):
+                if not b.isVisibleTo(page) or not b.isEnabled() or not b.isVisible():
+                    continue
+                centre = b.mapTo(page.viewport(), b.rect().center())
+                if not viewport.contains(centre):
+                    continue                                         # scrolled out of view; a user would scroll first
+                hit = win.childAt(b.mapTo(win, b.rect().center()))
+                if hit is b or (hit is not None and b.isAncestorOf(hit)):
+                    continue
+                notice = hit
+                while notice is not None and not isinstance(notice, _Toast):
+                    notice = notice.parentWidget()
+                if notices_may_cover and notice is not None and notice.isVisible():
+                    continue                                         # a notice drawn on top of it, in plain sight
                 blocked.append(f"{key}: '{b.text() or b.toolTip()}' is covered by {type(hit).__name__}")
-    assert not blocked, "buttons that a click cannot reach:\n" + "\n".join(blocked)
+        return blocked
 
-    # and the specific case that was reported: Settings -> Add an account really opens the dialog
-    import ui.pages.settings as st
-    opened = []
-    real_exec = st.StorageDialog.exec
-    st.StorageDialog.exec = lambda self: (opened.append(True), 0)[1]
     try:
-        win.go("settings")
-        pump(timeout=0.2)
-        add = [b for b in win.pages["settings"].findChildren(QPushButton) if b.text().strip() == "Add an account"][0]
-        QTest.mouseClick(win.childAt(add.mapTo(win, add.rect().center())), Qt.MouseButton.LeftButton)
-        assert opened, "clicking 'Add an account' did nothing"
-    finally:
-        st.StorageDialog.exec = real_exec
-    ctl.logout()
-    win.close()
+        ctl.begin_session("ui_jo")
+        assert pump(lambda: ctl.relay_state == "online", 20)
+        ctl.toast.emit("A notification that is on screen while you work.", "info")
+        pump(timeout=0.3)
+        blocked = unreachable(notices_may_cover=False)
+        assert not blocked, "buttons that a click cannot reach:\n" + "\n".join(blocked)
+
+        # the specific case that was reported: Settings -> Add an account really opens the dialog
+        import ui.pages.settings as st
+        opened = []
+        real_exec = st.StorageDialog.exec
+        st.StorageDialog.exec = lambda self: (opened.append(True), 0)[1]
+        try:
+            win.go("settings")
+            pump(timeout=0.2)
+            add = [b for b in win.pages["settings"].findChildren(QPushButton) if b.text().strip() == "Add an account"][0]
+            QTest.mouseClick(win.childAt(add.mapTo(win, add.rect().center())), Qt.MouseButton.LeftButton)
+            assert opened, "clicking 'Add an account' did nothing"
+        finally:
+            st.StorageDialog.exec = real_exec
+
+        for kind in ("success", "warning", "error"):                 # now a full stack of four
+            ctl.toast.emit("A notification that is on screen while you work.", kind)
+        pump(timeout=0.3)
+        assert win.toasts.isVisible() and win.toasts.height() < 400  # sized to its contents, not the whole window
+        blocked = unreachable(notices_may_cover=True)
+        assert not blocked, "buttons that a click cannot reach:\n" + "\n".join(blocked)
+    finally:                                                         # even after a failure: no session left running
+        ctl.logout()
+        win.close()

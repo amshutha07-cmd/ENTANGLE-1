@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" width="200" height="160">
+  <!-- Empty inbox: a sleepy tray, snoozing until something arrives. Every top-level group is a layer the app animates by id. -->
+  <defs><linearGradient id="trayBody" x1="100" y1="60" x2="100" y2="128" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#C3B8FF"/><stop offset="1" stop-color="#8F84F5"/></linearGradient><linearGradient id="trayLip" x1="100" y1="92" x2="100" y2="128" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#9E93FA"/><stop offset="1" stop-color="#7C70EC"/></linearGradient></defs>
+  <g id="blob"><circle cx="100" cy="84" r="64" fill="{{blob}}"/></g>
+  <g id="shadow"><ellipse cx="100" cy="138" rx="46" ry="6" fill="{{shadow}}"/></g>
+  <g id="tray"><path d="M56 94 L70 62 H130 L144 94 V120 C144 126 140 130 134 130 H66 C60 130 56 126 56 120 Z" fill="url(#trayBody)"/><path d="M74 70 H126 L134 88 H66 Z" fill="#FFFFFF" fill-opacity="0.35"/><path d="M56 94 H80 C82 102 90 106 100 106 C110 106 118 102 120 94 H144 V120 C144 126 140 130 134 130 H66 C60 130 56 126 56 120 Z" fill="url(#trayLip)"/></g>
+  <g id="face"><ellipse cx="80" cy="117" rx="6.5" ry="4" fill="#FF9DB5" fill-opacity="0.8"/><ellipse cx="120" cy="117" rx="6.5" ry="4" fill="#FF9DB5" fill-opacity="0.8"/><path d="M83 111 Q87.5 115 92 111" fill="none" stroke="#2A2E48" stroke-width="2.6" stroke-linecap="round"/><path d="M108 111 Q112.5 115 117 111" fill="none" stroke="#2A2E48" stroke-width="2.6" stroke-linecap="round"/><ellipse cx="100" cy="120" rx="2.6" ry="3" fill="#2A2E48"/></g>
+  <g id="z1"><path d="M128 60 H135 L128 67 H135" fill="none" stroke="#8EA6FF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="z2"><path d="M140 46 H149 L140 55 H149" fill="none" stroke="#8EA6FF" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="z3"><path d="M154 30 H165 L154 41 H165" fill="none" stroke="#8EA6FF" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g id="spark1"><path d="M44 46 C45.08 50.596 45.404 50.92 50 52 C45.404 53.08 45.08 53.404 44 58 C42.92 53.404 42.596 53.08 38 52 C42.596 50.92 42.92 50.596 44 46 Z" fill="#FFD66B"/></g>
+</svg>

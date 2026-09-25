@@ -6,10 +6,10 @@ from typing import Optional
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout
 
-from ui.dialogs import confirm, info
+from ui.dialogs import confirm, info, verify_fingerprint
 from ui.pages.base import Page
 from ui.widgets import (
-    Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, label,
+    Avatar, Banner, Button, Card, EmptyState, Fingerprint, ListRow, Pill, label,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -18,6 +18,7 @@ TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified"
 
 class ContactsPage(Page):
     navigate = pyqtSignal(str)
+    send_to_requested = pyqtSignal(str)                    # "Send them a file" -> the Send page, person already chosen
 
     def __init__(self, ctl):
         super().__init__(ctl, "People & keys",
@@ -45,23 +46,26 @@ class ContactsPage(Page):
 
         # contacts master/detail
         bar = QHBoxLayout()
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search people")
-        self.search.textChanged.connect(self.refresh)
+        bar.addWidget(label("PEOPLE YOU CAN SEND TO", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
         refresh = Button("Refresh from relay", "secondary", "refresh", "sm")
         refresh.clicked.connect(self._refresh_directory)
         imp = Button("Import an ID file", "secondary", "download", "sm")
         imp.clicked.connect(self._import)
-        bar.addWidget(self.search, 1)
         bar.addWidget(refresh)
         bar.addWidget(imp)
         self.root.addLayout(bar)
         self.msg = label("", "muted")
+        self.msg.hide()                                   # only takes space while there is something to say
         self.root.addWidget(self.msg)
+        self.search = QLineEdit()                         # lives in the list it filters (see below)
+        self.search.setPlaceholderText("Search people")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.refresh)
 
         row = QHBoxLayout()
         row.setSpacing(16)
-        left = Card(padding=8, spacing=0)
+        left = Card(padding=8, spacing=8)
+        left.body.addWidget(self.search)
         self.list = QListWidget()
         self.list.setMinimumHeight(260)
         self.list.itemSelectionChanged.connect(self._picked)
@@ -93,7 +97,13 @@ class ContactsPage(Page):
         self.remove_btn = Button("Remove this person", "ghost", "trash", "sm")
         self.remove_btn.clicked.connect(self._remove)
         self.detail.body.addWidget(self.verify_btn)
-        self.detail.body.addWidget(self.remove_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.send_btn = Button("Send them a file", "secondary", "send")
+        self.send_btn.clicked.connect(lambda: self._selected and self.send_to_requested.emit(self._selected))
+        more = QHBoxLayout()
+        more.addWidget(self.send_btn)
+        more.addStretch()
+        more.addWidget(self.remove_btn)
+        self.detail.body.addLayout(more)
         self.detail.body.addStretch()
         # Details (with their buttons) on the left: notifications stack up in the window's bottom-right corner.
         row.addWidget(self.detail, 6)
@@ -102,7 +112,10 @@ class ContactsPage(Page):
         self.root.addStretch(1)
 
         ctl.contacts_changed.connect(self.refresh)
-        ctl.session_started.connect(lambda _n: self.refresh())
+        ctl.session_started.connect(self._session_started)
+
+    def _session_started(self, _name: str) -> None:
+        self.refresh()
 
     def on_show(self) -> None:
         self.refresh()
@@ -122,7 +135,16 @@ class ContactsPage(Page):
         self.me_avatar.set_name(name or "?")
         self.me_fp.set(self.ctl.my_fingerprint())
         needle = self.search.text().strip().lower()
-        contacts = [c for c in self.ctl.contacts() if needle in c["operator"].lower()]
+        everyone = self.ctl.contacts()
+        contacts = [c for c in everyone if needle in c["operator"].lower()]
+        self.search.setVisible(bool(everyone))
+        self.empty.set_art("search" if everyone else "friends")
+        if everyone:
+            self.empty.set_text("No match", f"Nobody called “{self.search.text().strip()}”. Check the spelling, or press "
+                                            "“Refresh from relay”.")
+        else:
+            self.empty.set_text("No one yet", "Press “Refresh from relay” to find people, or import an ID file someone "
+                                              "sent you.")
         self.list.blockSignals(True)
         self.list.clear()
         for c in contacts:
@@ -169,10 +191,7 @@ class ContactsPage(Page):
 
     # ── actions ──────────────────────────────────────────────────────────────
     def _verify(self) -> None:
-        if self._selected and confirm(
-                self, "Confirm fingerprint",
-                f"Did {self._selected} read you EXACTLY this fingerprint, over a channel you trust?\n\n{self.d_fp.raw()}",
-                ok="Yes, it matches"):
+        if self._selected and verify_fingerprint(self, self._selected, self.d_fp.raw()):
             self.ctl.verify_contact(self._selected)
 
     def _remove(self) -> None:
@@ -182,11 +201,15 @@ class ContactsPage(Page):
             self.ctl.remove_contact(self._selected)
             self._selected = None
 
+    def _say(self, text: str) -> None:
+        self.msg.setText(text)
+        self.msg.setVisible(bool(text))
+
     def _refresh_directory(self) -> None:
-        self.msg.setText("Looking people up…")
+        self._say("Looking people up…")
         self.ctl.run_job(self.ctl.make_directory_job(),
-                         on_success=lambda r: (self.msg.setText(""), self.ctl.contacts_changed.emit()),
-                         on_fail=lambda m: self.msg.setText(m))
+                         on_success=lambda r: (self._say(""), self.ctl.contacts_changed.emit()),
+                         on_fail=self._say)
 
     def _export(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Where should the ID file be saved?")

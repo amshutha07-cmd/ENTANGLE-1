@@ -24,6 +24,7 @@ _REGISTRY_PATH = os.path.expanduser("~/.ansx_vault/network_registry.json")
 _REGISTRY_LOCK = threading.Lock()
 _BROADCAST_PORT = 8097
 _BROADCAST_INTERVAL = 15
+_LISTEN_RETRY = 15          # seconds between tries while another program holds the port
 
 WEB3_ENGINE = None
 
@@ -112,9 +113,12 @@ class _LANDiscovery:
     def __init__(self):
         self._running = False
         self._my_entry = None
+        self._wake = threading.Event()
+        self.listening = False
 
     def start_listener(self):
         self._running = True
+        self._wake.clear()
         t = threading.Thread(target=self._listen_loop, daemon=True, name="ANSX-LAN-Listen")
         t.start()
 
@@ -135,14 +139,34 @@ class _LANDiscovery:
             time.sleep(_BROADCAST_INTERVAL)
         sock.close()
 
-    def _listen_loop(self):
+    @staticmethod
+    def _bind() -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # cross-platform (SO_REUSEPORT fails on Windows)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # cross-platform
+            if hasattr(socket, "SO_REUSEPORT") and os.name != "nt":      # (SO_REUSEPORT fails on Windows)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  # other listeners here each hear it too
             sock.bind(("", _BROADCAST_PORT))
-        except Exception as e:
-            logger.error("[LAN] Bind failed: %s", e)
+            return sock
+        except OSError:
+            sock.close()
+            raise
+
+    def _listen_loop(self):
+        sock, told = None, False
+        while self._running and sock is None:
+            try:
+                sock = self._bind()
+            except OSError as e:
+                # Another program holds the port (e.g. an older copy of the app). Not fatal: keep trying, so peers
+                # on this network are found as soon as it is free, instead of never for the rest of the session.
+                if not told:
+                    logger.warning("[LAN] UDP port %d is busy (%s); will keep trying", _BROADCAST_PORT, e)
+                    told = True
+                self._wake.wait(_LISTEN_RETRY)
+        if sock is None:
             return
+        self.listening = True
         sock.settimeout(1.0)
         logger.info("[LAN] Listening for peers on UDP port %d", _BROADCAST_PORT)
         while self._running:
@@ -160,9 +184,11 @@ class _LANDiscovery:
             except Exception:
                 pass
         sock.close()
+        self.listening = False
 
     def stop(self):
         self._running = False
+        self._wake.set()                                  # end a wait for the port right away
 
 
 _LAN = _LANDiscovery()

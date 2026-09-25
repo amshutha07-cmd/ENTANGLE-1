@@ -1,22 +1,20 @@
 """ui/pages/settings.py — connection, cloud storage, appearance and security details."""
 from __future__ import annotations
 
-from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
-import cloud_dispatcher
 import engine
 import paths
 import platform_secret
 import relay_config
-from ui import theme
+from ui import motion, theme
 from ui.controller import pref, set_pref
 from ui.dialogs import StorageDialog, confirm
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
-from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, Pill, label
+from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, label
 
 AUTO_LOCK_CHOICES = [("Never", 0), ("After 5 minutes", 5), ("After 10 minutes", 10), ("After 30 minutes", 30), ("After 1 hour", 60)]
 
@@ -38,6 +36,7 @@ class StorageRow(QWidget):
         lay.addLayout(col, 1)
         edit = Button("Edit", "secondary", size="sm")
         rm = Button("", "ghost", "trash", "sm")
+        rm.setToolTip("Remove this storage account")
         edit.clicked.connect(lambda: on_edit(target))
         rm.clicked.connect(lambda: on_remove(target))
         lay.addWidget(edit)
@@ -129,7 +128,45 @@ class SettingsPage(Page):
         self.lock_combo.currentIndexChanged.connect(self._lock_picked)
         r.addWidget(self.lock_combo)
         app.body.addLayout(r)
+        r = QHBoxLayout()
+        r.addWidget(label("When you close the window", "body", wrap=False), 1)
+        self.close_combo = QComboBox()
+        self.close_combo.addItem("Keep running in the background", True)
+        self.close_combo.addItem("Quit the app", False)
+        self.close_combo.currentIndexChanged.connect(self._close_picked)
+        r.addWidget(self.close_combo)
+        app.body.addLayout(r)
+        self.close_note = label("In the background it keeps receiving files and tells you when one arrives, until it "
+                                "locks (see “Lock automatically”). Quit from the tray / menu bar icon.", "muted")
+        app.body.addWidget(self.close_note)
+        r = QHBoxLayout()
+        motion_label = label("Animations", "body", wrap=False)
+        motion_label.setToolTip("Short fades and slides that show what changed. Choose “Reduced” if motion bothers you.")
+        r.addWidget(motion_label, 1)
+        self.motion_combo = QComboBox()
+        self.motion_combo.addItem("On", False)
+        self.motion_combo.addItem("Reduced", True)
+        self.motion_combo.currentIndexChanged.connect(self._motion_picked)
+        r.addWidget(self.motion_combo)
+        app.body.addLayout(r)
         self.root.addWidget(app)
+
+        # ── keyboard shortcuts ──
+        keys = self.shortcuts_card = Card(padding=20, spacing=6)
+        keys.body.addWidget(label("Keyboard shortcuts", "h2", wrap=False))
+
+        def native(seq: str) -> str:
+            from PyQt6.QtGui import QKeySequence
+            return QKeySequence(seq).toString(QKeySequence.SequenceFormat.NativeText)
+        for what, seq in (("Home, Protect, Send", f"{native('Ctrl+1')}  {native('Ctrl+2')}  {native('Ctrl+3')}"),
+                          ("Inbox, People, Settings", f"{native('Ctrl+4')}  {native('Ctrl+5')}  {native('Ctrl+6')}"),
+                          ("Protect a file", native("Ctrl+O")),
+                          ("Lock now", native("Ctrl+L")),
+                          ("Move between buttons", "Tab  /  Shift+Tab")):
+            kv = KeyValue(what, seq, key_width=190)
+            keys.body.addWidget(kv)
+        keys.body.addWidget(label("You can also drop a file anywhere on the window to protect it.", "muted"))
+        self.root.addWidget(keys)
 
         # ── security details ──
         sec = Card(padding=20, spacing=6)
@@ -142,12 +179,27 @@ class SettingsPage(Page):
         sec.body.addWidget(self.sec_data)
         opn = Button("Open data folder", "ghost", "folder", "sm")
         opn.clicked.connect(lambda: open_folder(paths.vault_home()))
-        sec.body.addWidget(opn, 0, Qt.AlignmentFlag.AlignLeft)
+        report = Button("Save a support report…", "ghost", "download", "sm")
+        report.setToolTip("A zip with app and system facts and the recent log, for someone helping you. "
+                          "No keys, passphrases, file contents or storage secrets.")
+        report.clicked.connect(self.save_support_report)
+        tools = QHBoxLayout()
+        tools.addWidget(opn)
+        tools.addWidget(report)
+        tools.addStretch()
+        sec.body.addLayout(tools)
+        self.report_msg = Banner("", "success", "Show in folder", lambda: open_folder(self._report_path))
+        self.report_msg.hide()
+        self._report_path = ""
+        sec.body.addWidget(self.report_msg)
         self.root.addWidget(sec)
         self.root.addStretch(1)
 
         self._loading = True
-        ctl.session_started.connect(lambda _n: self.on_show())
+        ctl.session_started.connect(self._session_started)
+
+    def _session_started(self, _name: str) -> None:
+        self.on_show()
 
     def on_show(self) -> None:
         self._loading = True
@@ -160,6 +212,9 @@ class SettingsPage(Page):
         mins = int(pref("auto_lock_minutes", 10) or 0)
         idx = max(0, self.lock_combo.findData(mins))
         self.lock_combo.setCurrentIndex(idx)
+        self.motion_combo.setCurrentIndex(1 if pref("reduce_motion", False) else 0)
+        self.close_combo.setCurrentIndex(0 if pref("close_to_tray", True) else 1)
+        self.close_note.setVisible(bool(pref("close_to_tray", True)))
         try:
             backend = platform_secret.backend_name()
         except Exception:
@@ -186,8 +241,8 @@ class SettingsPage(Page):
         if res["secure"]:
             self.relay_msg.set(f"Connected. Files up to {mb} MB, kept up to {res['limits']['ttl_seconds'] // 86400} days.", "success")
         else:
-            self.relay_msg.set(f"Connected, but this address is not encrypted (http). Your files stay end-to-end encrypted, "
-                               f"but who you talk to and when is visible on the network. Use https:// for real use.", "warning")
+            self.relay_msg.set("Connected, but this address is not encrypted (http). Your files stay end-to-end encrypted, "
+                               "but who you talk to and when is visible on the network. Use https:// for real use.", "warning")
 
     def _relay_bad(self, message: str) -> None:
         self.relay_test.setEnabled(True)
@@ -247,6 +302,48 @@ class SettingsPage(Page):
         if self._loading:
             return
         self.theme_changed.emit(self.theme_combo.currentData())
+
+    def save_support_report(self, path: str = "") -> str:
+        """Ask where, then write the support report there. Returns the path ("" if cancelled or failed)."""
+        import datetime
+        import os
+        import support
+        from PyQt6.QtWidgets import QFileDialog
+        if not path:
+            default = os.path.join(paths.downloads_dir(),
+                                   f"ansx-support-{datetime.datetime.now():%Y%m%d-%H%M}.zip")
+            path, _ = QFileDialog.getSaveFileName(self, "Save a support report", default, "Zip files (*.zip)")
+            if not path:
+                return ""
+        try:
+            from ui.main_window import APP_VERSION
+            support.build_report(path, APP_VERSION, self.ctl.relay_state)
+        except OSError as exc:
+            self.report_msg.set(f"Could not save the report: {exc}", "danger")
+            self.report_msg._btn.hide()
+            motion.reveal(self.report_msg)
+            return ""
+        self._report_path = path
+        self.report_msg.set("Saved. It has no keys, passphrases, file contents or storage secrets. Its log can mention "
+                            "the names of people you exchanged files with: look through it before you share it.",
+                            "success")
+        self.report_msg._btn.show()
+        motion.reveal(self.report_msg)
+        return path
+
+    def _close_picked(self) -> None:
+        if self._loading:
+            return
+        keep = bool(self.close_combo.currentData())
+        set_pref("close_to_tray", keep)
+        self.close_note.setVisible(keep)
+
+    def _motion_picked(self) -> None:
+        if self._loading:
+            return
+        value = bool(self.motion_combo.currentData())
+        set_pref("reduce_motion", value)
+        motion.set_reduced(value)
 
     def _lock_picked(self) -> None:
         if self._loading:

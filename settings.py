@@ -1,5 +1,3 @@
-import os
-
 # ── Blockchain (Polygon Amoy Testnet) ─────────────────────────────────────────
 # Run deploy_contracts.py once to populate these addresses.
 AMOY_RPC_URL           = "https://rpc-amoy.polygon.technology"

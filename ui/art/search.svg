@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" width="200" height="160">
+  <!-- No match: a magnifier looking around. Every top-level group is a layer the app animates by id. -->
+  <defs></defs>
+  <g id="blob"><circle cx="100" cy="84" r="64" fill="{{blob}}"/></g>
+  <g id="shadow"><ellipse cx="104" cy="140" rx="30" ry="5" fill="{{shadow}}"/></g>
+  <g id="glass"><path d="M122 102 L146 126" stroke="#7C86F5" stroke-width="12" stroke-linecap="round"/><circle cx="94" cy="76" r="34" fill="#EAF0FF" fill-opacity="0.95"/><circle cx="94" cy="76" r="34" fill="none" stroke="#8EA6FF" stroke-width="9"/><path d="M72 64 C76 54 86 49 96 50" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-opacity="0.9"/></g>
+  <g id="dot1"><circle cx="82" cy="80" r="4.2" fill="#2A2E48"/></g>
+  <g id="dot2"><circle cx="94" cy="80" r="4.2" fill="#2A2E48"/></g>
+  <g id="dot3"><circle cx="106" cy="80" r="4.2" fill="#2A2E48"/></g>
+  <g id="spark1"><path d="M152 40 C153.08 44.596 153.404 44.92 158 46 C153.404 47.08 153.08 47.404 152 52 C150.92 47.404 150.596 47.08 146 46 C150.596 44.92 150.92 44.596 152 40 Z" fill="#FFD66B"/></g>
+  <g id="spark2"><path d="M46 111.5 C46.81 114.947 47.053 115.19 50.5 116 C47.053 116.81 46.81 117.053 46 120.5 C45.19 117.053 44.947 116.81 41.5 116 C44.947 115.19 45.19 114.947 46 111.5 Z" fill="#FF9DB5"/></g>
+</svg>

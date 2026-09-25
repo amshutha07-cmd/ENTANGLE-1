@@ -9,6 +9,8 @@ Thumbs.db
 desktop.ini
 
 # secrets - never commit
+# your relay's address, written by run_relay.py --tailscale (commit it only if the repository is private)
+default_config.json
 .env
 storage_targets.json
 *.ansx_id
@@ -34,3 +36,4 @@ outbox/
 
 # relay server data (names, waiting files)
 relay_data/
+.vscode/

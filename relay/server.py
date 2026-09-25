@@ -16,7 +16,7 @@ Authentication (every non-public call)
   Signed bytes: "ANSX1\\n{METHOD}\\n{path?query}\\n{ts}\\n{nonce}\\n{sha256_hex(body)}"
   Timestamps must be within ±CLOCK_SKEW; every nonce is single-use (replay protection, persisted).
 
-Run:  uvicorn relay.server:create_app --factory --host 0.0.0.0 --port 8000
+Run:  uvicorn relay.server:create_app --factory --host 0.0.0.0 --port 8000 --ws none
 Env:  ANSX_RELAY_DATA (state dir), ANSX_MAX_TRANSFER_MB, ANSX_USER_QUOTA_MB, ANSX_TTL_HOURS, ...
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from cryptography.exceptions import InvalidSignature
@@ -130,8 +130,7 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
     def db():
         conn = sqlite3.connect(db_path, timeout=15, isolation_level=None)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA foreign_keys=ON")            # per connection; WAL is set once, below
         try:
             conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -145,6 +144,9 @@ def create_app(cfg: Optional[Config] = None) -> FastAPI:
 
     _init = sqlite3.connect(db_path, timeout=15)
     try:
+        # WAL once, here, before any request: the mode is stored in the file. Switched per request instead, the first
+        # requests to a new relay raced to switch it and SQLite failed one of them at once ("database is locked").
+        _init.execute("PRAGMA journal_mode=WAL")
         _init.executescript("""
             CREATE TABLE IF NOT EXISTS identities (
                 username TEXT PRIMARY KEY, public_key TEXT NOT NULL, fingerprint TEXT NOT NULL,

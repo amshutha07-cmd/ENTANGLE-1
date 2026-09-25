@@ -7,7 +7,6 @@ RelayClient (tested against a real relay). This thread only keeps the lists fres
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 from PyQt6.QtCore import QThread, pyqtSignal

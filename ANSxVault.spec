@@ -19,7 +19,8 @@ a = Analysis(
     pathex=[],
     binaries=_BINARIES,
     # Ship your relay address inside the app: copy default_config.example.json to default_config.json and edit it
-    datas=[('default_config.json', '.')] if os.path.exists('default_config.json') else [],
+    datas=[('ui/art/*.svg', 'ui/art')]                   # the animated illustrations
+          + ([('default_config.json', '.')] if os.path.exists('default_config.json') else []),
     hiddenimports=['keyring.backends'],
     hookspath=[],
     runtime_hooks=[],

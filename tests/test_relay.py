@@ -1,5 +1,4 @@
 """End-to-end tests: RelayClient against a REAL relay server (uvicorn on a local port)."""
-import hashlib
 import os
 import socket
 import threading
@@ -31,7 +30,7 @@ def server(tmp_path_factory):
                  user_quota_bytes=300_000, register_per_ip_hour=1000, transfers_per_user_hour=1000, clock_skew=60)
     app = create_app(cfg)
     s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
-    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", ws="none"))
     t = threading.Thread(target=srv.run, daemon=True); t.start()
     for _ in range(100):
         try:
@@ -279,7 +278,7 @@ def test_cancel_callback_stops_send(server, users, tmp_path):
 
 
 def test_network_errors_are_retried(server, users, tmp_path, monkeypatch):
-    alice, bob = users["alice"][0], users["bob"][0]
+    bob = users["bob"][0]
     src = _file(tmp_path, 9000)
     real = requests.Session.request
     state = {"fail": 3}
@@ -295,3 +294,17 @@ def test_network_errors_are_retried(server, users, tmp_path, monkeypatch):
     assert state["fail"] == 0
     monkeypatch.undo()
     bob.reject(tid)
+
+
+def test_a_new_relay_is_in_wal_mode_before_its_first_request(tmp_path):
+    """
+    Regression: every request used to switch the database to WAL itself, so the first requests to a new relay raced
+    to do it and SQLite failed one of them at once ("database is locked", a 500). The switch now happens at start.
+    """
+    import sqlite3
+    create_app(Config(data_dir=str(tmp_path)))
+    conn = sqlite3.connect(str(tmp_path / "relay.db"))
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()

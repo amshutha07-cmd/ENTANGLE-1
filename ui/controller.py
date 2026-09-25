@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 ProgressFn = Callable[[str, int], None]
 
 
+# Every started job stays referenced here until its thread has really finished. Qt aborts the whole process if a
+# QThread object is destroyed while its thread is still running (e.g. a controller dropped mid-lookup).
+RUNNING: set = set()
+
+
+def wait_for_all_jobs(ms: int = 20000) -> None:
+    """Cancel and wait for every job still running anywhere (used at shutdown and between tests)."""
+    for j in list(RUNNING):
+        j.cancel()
+        j.wait(ms)
+
+
 class Job(QThread):
     """Runs fn(progress, cancelled) off the UI thread. Emits exactly one of succeeded / failed / cancelled."""
 
@@ -92,6 +104,8 @@ class AppController(QObject):
     contacts_changed = pyqtSignal()
     activity_changed = pyqtSignal()
     toast = pyqtSignal(str, str)                       # message, kind: info|success|warning|error
+    work_progress = pyqtSignal(str, str, str, int)     # job key, page doing it, label, percent (real work only)
+    work_done = pyqtSignal(str)                        # job key
 
     def __init__(self) -> None:
         super().__init__()
@@ -109,6 +123,8 @@ class AppController(QObject):
                 on_progress: Optional[Callable] = None, on_cancel: Optional[Callable] = None) -> Job:
         """Wire callbacks (they run on the UI thread), keep the job alive, start it."""
         self._jobs.add(job)
+        RUNNING.add(job)
+        job.finished.connect(lambda j=job: RUNNING.discard(j))   # QThread.finished: the thread has ended
         if on_progress:
             job.progress.connect(on_progress)
         if on_success:
@@ -119,8 +135,25 @@ class AppController(QObject):
             job.cancelled.connect(on_cancel)
         for sig in (job.succeeded, job.failed, job.cancelled):
             sig.connect(lambda *_a, j=job: self._jobs.discard(j))
+        if job.name in self.WORK_JOBS:                      # visible everywhere, not only on the page that started it
+            key, page = str(id(job)), getattr(job, "page", "") or self.WORK_PAGES.get(job.name, "home")
+            job.progress.connect(lambda label, pct, k=key, p=page: self.work_progress.emit(k, p, label, pct))
+            for sig in (job.succeeded, job.failed, job.cancelled):
+                sig.connect(lambda *_a, k=key: self.work_done.emit(k))
+            self.work_progress.emit(key, page, self.WORK_START.get(job.name, "Working…"), 0)
         job.start()
         return job
+
+    WORK_JOBS = ("protect", "send", "accept", "restore", "open-package", "remove")
+    WORK_PAGES = {"protect": "vault", "restore": "vault", "send": "send", "accept": "inbox", "open-package": "inbox",
+                  "remove": "vault"}
+    WORK_START = {"protect": "Protecting…", "restore": "Restoring…", "send": "Sending…", "accept": "Receiving…",
+                  "open-package": "Opening a package…", "remove": "Deleting from cloud storage…"}
+
+    def busy(self) -> bool:
+        """Is work someone would lose still running (protecting, sending, receiving, restoring)? Background lookups
+        such as refreshing the directory do not count."""
+        return any(j.isRunning() and j.name in self.WORK_JOBS for j in list(self._jobs))
 
     def wait_for_jobs(self, ms: int = 5000) -> None:
         for j in list(self._jobs):
@@ -155,7 +188,7 @@ class AppController(QObject):
                 # Read before writing: if this card already opens an identity here, overwriting it would lock that
                 # identity out for good. A card that cannot be read cannot be written either, so this is no extra hurdle.
                 try:
-                    current = bridge.read_payload_from_tag(timeout=45)
+                    current = bridge.read_payload_from_tag(timeout=45, cancelled=cancelled)
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if cancelled():
@@ -172,7 +205,7 @@ class AppController(QObject):
                 progress("Writing your card… keep it on the reader", 30)
                 secret = new_card_secret()
                 try:
-                    written = bridge.write_payload_to_tag(secret, timeout=45)
+                    written = bridge.write_payload_to_tag(secret, timeout=45, same_card=True)   # the card just checked
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if not written:
@@ -192,7 +225,7 @@ class AppController(QObject):
                 if not bridge.is_connected():
                     raise IdentityError("No card reader found. Plug it in and try again.")
                 try:
-                    secret = bridge.read_payload_from_tag(timeout=30) or ""
+                    secret = bridge.read_payload_from_tag(timeout=30, cancelled=cancelled) or ""
                 except nfc_serial.ReaderError as exc:
                     raise IdentityError(str(exc)) from exc
                 if cancelled():
@@ -202,6 +235,14 @@ class AppController(QObject):
             progress("Unlocking…", 60)
             if not SecurityCore.verify_login(name, secret):
                 raise IdentityError("That card or passphrase does not unlock this identity.")
+            if SecurityCore.auth_mode(name) == "nfc" and getattr(bridge, "last_key", None) == "D":
+                # A card from before per-card keys: lock it now that we know it is really this person's card.
+                progress("Protecting your card… keep it on the reader", 85)
+                try:
+                    if bridge.lock_card(secret):
+                        logger.info("Card for %s is now locked with its own key.", name)
+                except nfc_serial.ReaderError as exc:
+                    logger.warning("Could not lock the card yet (will try at the next login): %s", exc)
             return name
         return Job(work, "login")
 
@@ -365,16 +406,51 @@ class AppController(QObject):
     def after_protect(self, result: "vault_service.ProtectResult") -> None:
         e = result.entry
         activity.add("protected", f"Protected {e['original_filename']}",
-                     f"{result.cloud} pieces in cloud storage, {result.inline} carried inside the package",
+                     (f"{result.cloud} of {result.cloud + result.inline} pieces in cloud storage" if result.cloud
+                      else "All 12 pieces carried inside the package"),
                      operator=self.operator or "")
         self.vault_changed.emit()
         self.activity_changed.emit()
 
-    def delete_entry(self, entry_id: str) -> bool:
+    def pending_sends(self, entry: dict) -> list[str]:
+        """People this file was sent to who have not picked it up yet (their download needs its cloud pieces)."""
+        import json
+        try:
+            with open(self._sent_names_path()) as f:
+                names = json.load(f)
+        except (OSError, ValueError):
+            names = {}
+        waiting = []
+        for o in self.outbox or []:
+            rec = names.get(o.get("id"), {}) if isinstance(names, dict) else {}
+            same = rec.get("entry") == entry.get("id") if rec.get("entry") else rec.get("file") == entry.get("original_filename")
+            if same and o.get("state") in ("uploading", "ready") and o.get("to") not in waiting:
+                waiting.append(o["to"])
+        return waiting
+
+    def make_remove_job(self, entry: dict) -> Job:
+        """Delete a file's pieces from cloud storage. Fails (keeping the file) unless every piece is gone."""
+        private_pem = self.identity().get("private_key", "")
+
+        def work(progress: ProgressFn, cancelled: Callable[[], bool]) -> dict:
+            progress("Finding where its pieces are…", 15)
+            result = vault_service.delete_cloud_pieces(entry, private_pem)
+            progress("Deleting its pieces from your cloud storage…", 80)
+            if result["problems"]:
+                left = result["total"] - result["deleted"]
+                raise vault_service.VaultError(
+                    f"{left} of {result['total']} pieces could not be deleted: {'; '.join(result['problems'][:2])}. "
+                    "The file stays in your vault, so you can fix that and try again.")
+            return result
+        return Job(work, "remove")
+
+    def delete_entry(self, entry_id: str, cloud_deleted: int = 0) -> bool:
         entry = VaultLedger.get(entry_id)
         ok = VaultLedger.remove_entry(entry_id)
         if ok and entry:
-            activity.add("security", f"Removed {entry['original_filename']} from your vault", operator=self.operator or "")
+            where = (f" and deleted its {cloud_deleted} pieces from cloud storage" if cloud_deleted else "")
+            activity.add("security", f"Removed {entry['original_filename']} from your vault{where}",
+                         operator=self.operator or "")
             self.vault_changed.emit()
             self.activity_changed.emit()
         return ok
@@ -493,10 +569,46 @@ class AppController(QObject):
                 raise
             self._send_resume.pop(key, None)
             _silent_remove(out_path)                       # the sender cannot open it anyway; leave no copy
+            try:
+                self.remember_sent(tid, entry.get("original_filename", ""), entry.get("id", ""))   # "Sent" names it
+            except OSError:
+                pass
             return {"id": tid, "to": recipient}
         return Job(work, "send")
 
-    def after_send(self, entry: dict, recipient: str) -> None:
+    # The relay only knows "a package for sam"; remember locally which file each transfer carried, so the Sent list
+    # can say "Q3 board deck.pdf → sam". Kept next to the vault list (same private folder), newest 500 only.
+    @staticmethod
+    def _sent_names_path() -> str:
+        return os.path.join(paths.vault_home(), "sent_names.json")
+
+    def sent_file_name(self, transfer_id: str) -> str:
+        import json
+        try:
+            with open(self._sent_names_path()) as f:
+                return str(json.load(f).get(transfer_id, {}).get("file", ""))
+        except (OSError, ValueError, AttributeError):
+            return ""
+
+    def remember_sent(self, transfer_id: str, file_name: str, entry_id: str = "") -> None:
+        import json
+        from security_core import _atomic_write_json
+        try:
+            with open(self._sent_names_path()) as f:
+                names = json.load(f)
+            if not isinstance(names, dict):
+                names = {}
+        except (OSError, ValueError):
+            names = {}
+        names[transfer_id] = {"file": file_name, "owner": self.operator or "", "entry": entry_id}
+        if len(names) > 500:
+            names = dict(list(names.items())[-500:])
+        os.makedirs(paths.vault_home(), mode=0o700, exist_ok=True)
+        _atomic_write_json(self._sent_names_path(), names)
+
+    def after_send(self, entry: dict, recipient: str, transfer_id: str = "") -> None:
+        if transfer_id:
+            self.remember_sent(transfer_id, entry.get("original_filename", ""))
         activity.add("sent", f"Sent {entry['original_filename']} to {recipient}", operator=self.operator or "")
         self.activity_changed.emit()
 

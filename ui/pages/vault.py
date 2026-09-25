@@ -6,14 +6,16 @@ from typing import Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from ui.controller import Job
-from ui.dialogs import confirm
+from ui.dialogs import confirm_remove
 from ui.pages.base import Page
+from ui import motion, theme
 from ui.widgets import (
     clear_layout,
-    Banner, Button, Card, DropZone, EmptyState, IconBadge, ProgressPanel, human_size, label,
+    Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
+    human_size, label,
 )
 
 
@@ -33,18 +35,18 @@ class VaultRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(14)
-        lay.addWidget(IconBadge("file", "primary", 42))
+        lay.addWidget(IconBadge(*file_icon(entry["original_filename"]), 42))
         col = QVBoxLayout()
         col.setSpacing(2)
-        name = label(entry["original_filename"], "body", wrap=False)
+        name = ElidedLabel(entry["original_filename"], "body")
         name.setStyleSheet("font-weight: 650;")
         st = entry.get("storage") or {}
         cloud, inline = st.get("cloud", 0), st.get("inline", 0)
-        where = (f"{cloud} pieces in cloud storage, {inline} inside the package" if cloud
-                 else "stored inside the package" if st else "")
-        sub = " · ".join(x for x in (human_size(entry.get("size")), entry["date_vaulted"][:16], where) if x and x != "—")
+        where = (f"{cloud} of {cloud + inline} pieces in cloud storage" if cloud
+                 else "all pieces inside the package" if st else "")
+        sub = " · ".join(x for x in (human_size(entry.get("size")), friendly_date(entry["date_vaulted"]), where) if x and x != "—")
         col.addWidget(name)
-        col.addWidget(label(sub, "muted", wrap=False))
+        col.addWidget(ElidedLabel(sub, "muted"))
         lay.addLayout(col, 1)
         send = Button("Send", "primary", "send", "sm")
         restore = Button("Restore", "secondary", "download", "sm")
@@ -72,19 +74,33 @@ class VaultPage(Page):
             lambda: self.navigate.emit("settings"))
         self.root.addWidget(self.storage_banner)
 
-        self.drop = DropZone("Drop a file here to protect it", "or click to choose one from your computer")
-        self.drop.file_chosen.connect(self.protect_file)
+        self.drop = DropZone("Drop files here to protect them", "or click to choose one or more from your computer")
+        self.drop.files_chosen.connect(self.protect_files)
         self.root.addWidget(self.drop)
 
         self.progress = ProgressPanel()
         self.progress.cancel_clicked.connect(self._cancel)
         self.root.addWidget(self.progress)
 
-        self.result = Banner("", "success")
+        self.result = Banner("", "success", "Send it now", self._send_last)
+        self._last_protected: Optional[str] = None
         self.result.hide()
         self.root.addWidget(self.result)
 
-        self.root.addWidget(label("YOUR PROTECTED FILES", "eyebrow", wrap=False))
+        head = QHBoxLayout()
+        head.addWidget(label("YOUR PROTECTED FILES", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Search your files")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.setMaximumWidth(260)
+        self.filter.textChanged.connect(lambda _t: self.refresh())
+        self.filter.hide()                                # only once the list is long enough to need it
+        head.addWidget(self.filter)
+        self.root.addLayout(head)
+        self._flash_id: Optional[str] = None
+        self._queue: list[str] = []                              # files waiting to be protected, in order
+        self._batch = {"total": 0, "done": [], "failed": []}
+        self._current_name = ""
         self.list_card = Card(padding=6, spacing=0)
         self.root.addWidget(self.list_card)
         self.root.addStretch(1)
@@ -101,14 +117,44 @@ class VaultPage(Page):
 
     # ── protecting ───────────────────────────────────────────────────────────
     def protect_file(self, path: str) -> None:
-        if self._job is not None:
+        self.protect_files([path])
+
+    def protect_files(self, paths: list) -> None:
+        """Protect one or several files, one after another. More can be added while it works (they join the queue)."""
+        files = [p for p in paths if os.path.isfile(p)]
+        if not files:
             return
-        self.result.hide()
+        if self._job is None and not self._queue:           # a new batch
+            self._batch = {"total": 0, "done": [], "failed": []}
+            self.result.hide()
+        elif self._job is not None and self._job.name != "protect":
+            self.ctl.toast.emit("Wait for the restore to finish, then protect more files.", "warning")
+            return
+        self._batch["total"] += len(files)
+        self._queue.extend(files)
+        if self._job is None:
+            self._start_next()
+        elif self._batch["total"] > 1:
+            self._retitle()
+
+    def _batch_position(self) -> int:
+        b = self._batch
+        return len(b["done"]) + len(b["failed"]) + 1
+
+    def _retitle(self) -> None:
+        b = self._batch
+        base = f"Protecting {self._current_name}"
+        self.progress.title.setText(f"{base}  ({self._batch_position()} of {b['total']})" if b["total"] > 1 else base)
+
+    def _start_next(self) -> None:
+        path = self._queue.pop(0)
+        self._current_name = os.path.basename(path)
         self.drop.setEnabled(False)
-        self.progress.start(f"Protecting {os.path.basename(path)}")
+        self.progress.start("")
+        self._retitle()
         job = self.ctl.make_protect_job(path)
         self._job = job
-        self.ctl.run_job(job, on_success=self._protected, on_fail=self._failed, on_cancel=self._cancelled,
+        self.ctl.run_job(job, on_success=self._protected, on_fail=self._protect_failed, on_cancel=self._cancelled,
                          on_progress=lambda text, pct: self.progress.update_progress(text, pct))
 
     def _done(self) -> None:
@@ -117,9 +163,21 @@ class VaultPage(Page):
         self.progress.finish()
 
     def _protected(self, res) -> None:
-        self._done()
+        self._job = None
         self.ctl.after_protect(res)
+        self._batch["done"].append(res)
+        self._flash_id = res.entry["id"]
+        self.refresh()
+        if self._queue:
+            self._start_next()
+            return
+        self._done()
+        if self._batch["total"] > 1:
+            self._batch_summary()
+            return
         name = res.entry["original_filename"]
+        self._last_protected = res.entry["id"]
+        self.result._btn.show()
         if res.storage_configured and res.upload_errors:
             msg = (f"“{name}” is protected, but {len(res.upload_errors)} piece(s) could not be uploaded, so they are kept "
                    f"inside the package instead. Check your storage in Settings. ({next(iter(res.upload_errors.values()))})")
@@ -128,18 +186,55 @@ class VaultPage(Page):
             self.result.set(f"“{name}” is protected. {res.cloud} pieces are in your cloud storage and the rest travel inside the package.", "success")
         else:
             self.result.set(f"“{name}” is protected. All 12 pieces are kept inside the package.", "success")
-        self.result.show()
-        self.ctl.toast.emit(f"{name} is protected.", "success")
+        motion.reveal(self.result)
+        self.notify_if_away(f"{name} is protected.", "success")
 
-    def _failed(self, message: str) -> None:
+    def _protect_failed(self, message: str) -> None:
+        self._job = None
+        self._batch["failed"].append((self._current_name, message))
+        if self._queue:                                     # one bad file does not stop the others
+            self._start_next()
+            return
+        if self._batch["total"] > 1:
+            self._done()
+            self._batch_summary()
+        else:
+            self._failed(message)
+
+    def _batch_summary(self) -> None:
+        b = self._batch
+        ok, bad = len(b["done"]), b["failed"]
+        self._last_protected = None
+        self.result._btn.hide()
+        if not bad:
+            self.result.set(f"All {ok} files are protected. Send any of them from the list below.", "success")
+            self.notify_if_away(f"{ok} files protected.", "success")
+        else:
+            why = "; ".join(f"“{n}”: {m}" for n, m in bad[:3]) + ("; …" if len(bad) > 3 else "")
+            self.result.set(f"{ok} of {b['total']} files protected. Not protected: {why}", "warning" if ok else "danger")
+            self.notify_if_away(f"{ok} of {b['total']} files protected.", "warning")
+        motion.reveal(self.result)
+
+    def _send_last(self) -> None:
+        if self._last_protected:
+            self.send_requested.emit(self._last_protected)
+
+    def _failed(self, message: str, what: str = "protect the file") -> None:
         self._done()
+        self._last_protected = None
+        self.result._btn.hide()
         self.result.set(message, "danger")
-        self.result.show()
-        self.ctl.toast.emit("Could not protect the file.", "error")
+        motion.reveal(self.result)
+        self.notify_if_away(f"Could not {what}. Open Protect to see why.", "error")
+
+    def _restore_failed(self, message: str) -> None:
+        self._failed(message, "restore the file")
 
     def _cancelled(self) -> None:
+        left = len(self._queue)
+        self._queue.clear()                                   # cancelling stops the whole batch
         self._done()
-        self.ctl.toast.emit("Cancelled.", "info")
+        self.ctl.toast.emit(f"Cancelled. {left} more file(s) were not started." if left else "Cancelled.", "info")
 
     def _cancel(self) -> None:
         if self._job:
@@ -151,17 +246,26 @@ class VaultPage(Page):
     def refresh(self) -> None:
         lay = self.list_card.body
         clear_layout(lay)
-        entries = self.ctl.vault_entries()
-        if not entries:
+        everything = self.ctl.vault_entries()
+        self.filter.setVisible(len(everything) > 6 or bool(self.filter.text()))
+        needle = self.filter.text().strip().lower()
+        entries = [e for e in everything if needle in e["original_filename"].lower()]
+        if not everything:
             lay.addWidget(EmptyState("shield", "No protected files yet",
                                      "Drop a file above. You can then send it, or restore it any time."))
             return
+        if not entries:
+            lay.addWidget(EmptyState("search", "No match", f"None of your files is called “{needle}”."))
+            return
+        flash, self._flash_id = self._flash_id, None
         for e in entries:
             row = VaultRow(e)
             row.send_clicked.connect(self.send_requested)
             row.restore_clicked.connect(self._restore)
             row.remove_clicked.connect(self._remove)
             lay.addWidget(row)
+            if e["id"] == flash:                          # the file just protected: show where it landed
+                motion.later(60, lambda r=row: motion.flash(r, theme.color("primary_soft")))
 
     def _restore(self, entry_id: str) -> None:
         from security_core import VaultLedger
@@ -172,16 +276,17 @@ class VaultPage(Page):
         self.progress.start(f"Restoring {entry['original_filename']}")
         job = self.ctl.make_restore_job(entry)
         self._job = job
-        self.ctl.run_job(job, on_success=self._restored, on_fail=self._failed, on_cancel=self._cancelled,
+        self.ctl.run_job(job, on_success=self._restored, on_fail=self._restore_failed, on_cancel=self._cancelled,
                          on_progress=lambda text, pct: self.progress.update_progress(text, pct))
 
     def _restored(self, info: dict) -> None:
         self._done()
         self.ctl.after_restore(os.path.basename(info["path"]))
         note, kind = self.ctl.signature_note(info)
+        self.result._btn.hide()                                     # "Send it now" belongs to protecting only
         self.result.set(f"Restored to {info['path']}" + ("" if kind == "success" else f". {note}"), kind)
-        self.result.show()
-        self.ctl.toast.emit("File restored to your Downloads folder.", "success")
+        motion.reveal(self.result)
+        self.notify_if_away("File restored to your Downloads folder.", "success")
         open_folder(info["path"])
 
     def _remove(self, entry_id: str) -> None:
@@ -189,8 +294,36 @@ class VaultPage(Page):
         entry = VaultLedger.get(entry_id)
         if not entry:
             return
-        if confirm(self, "Remove from your vault?",
-                   f"“{entry['original_filename']}” will no longer be listed and its protected package is deleted from this "
-                   "computer. Pieces in your cloud storage are not deleted; remove them in your provider's dashboard if you want.",
-                   ok="Remove", danger=True):
+        cloud_n = int((entry.get("storage") or {}).get("cloud", 0) or 0)
+        also_cloud = confirm_remove(self, entry["original_filename"], cloud_n,
+                                    self.ctl.pending_sends(entry) if cloud_n else [])
+        if also_cloud is None:
+            return
+        if not also_cloud:
             self.ctl.delete_entry(entry_id)
+            return
+        if self._job is not None:
+            self.ctl.toast.emit("Wait for the current file to finish, then remove this one.", "warning")
+            return
+        self.result.hide()
+        self.drop.setEnabled(False)
+        self.progress.start(f"Removing {entry['original_filename']}")
+        job = self.ctl.make_remove_job(entry)
+        self._job = job
+        self.ctl.run_job(job, on_success=lambda r, e=entry: self._removed(e, r), on_fail=self._remove_failed,
+                         on_cancel=self._cancelled, on_progress=lambda text, pct: self.progress.update_progress(text, pct))
+
+    def _removed(self, entry: dict, result: dict) -> None:
+        """Every cloud piece is gone: now the local package can go too (it was the only map of where they were)."""
+        self._done()
+        self.ctl.delete_entry(entry["id"], cloud_deleted=result["deleted"])
+        self.result._btn.hide()
+        self.result.set(f"Removed “{entry['original_filename']}” and deleted its {result['deleted']} pieces from your "
+                        "cloud storage.", "success")
+        motion.reveal(self.result)
+
+    def _remove_failed(self, message: str) -> None:
+        self._done()
+        self.result._btn.hide()
+        self.result.set(message, "danger")
+        motion.reveal(self.result)

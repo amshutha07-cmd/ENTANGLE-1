@@ -37,6 +37,7 @@ _P = {
     "search": '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.2-4.2"/>',
     "chevron": '<path d="M9 6l6 6-6 6"/>',
     "back": '<path d="M15 6l-6 6 6 6"/>',
+    "eye_off": '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.7 10.7 0 0112 5c6.5 0 10 7 10 7a17.6 17.6 0 01-3.2 4.2"/><path d="M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.6 9.6 0 005.4-1.6"/><path d="M9.9 9.9a3 3 0 004.2 4.2"/>',
     "eye": '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     "logout": '<path d="M10 4H5v16h5"/><path d="M15 8l4 4-4 4"/><path d="M19 12H9"/>',
     "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
@@ -44,6 +45,13 @@ _P = {
     "activity": '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
     "package": '<path d="M12 3l8 4v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4"/><path d="M12 11v10"/>',
     "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    "doc": '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M10 13h6"/><path d="M10 17h4"/>',
+    "image": '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
+    "sheet": '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16"/><path d="M4 15h16"/><path d="M10 3v18"/>',
+    "archive": '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 3v2M12 7v2M12 11v2"/><rect x="10.5" y="14" width="3" height="4" rx="1"/>',
+    "media": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/>',
+    "audio": '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
+    "code": '<path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/><path d="M13.5 5l-3 14"/>',
     "link": '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
 }
 
@@ -76,6 +84,46 @@ def pixmap(name: str, color: str, size: int = 20, stroke: float = 1.9) -> QPixma
     pm = QPixmap.fromImage(img)
     pm.setDevicePixelRatio(ratio)
     return pm
+
+
+def app_icon() -> QIcon:
+    """
+    The application's own icon (Dock, taskbar, window title, tray): a neon mint-to-violet shield on a dark glass tile,
+    drawn at every size a desktop asks for. Brand colours are fixed, not themed, so the icon looks the same everywhere.
+    """
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QLinearGradient, QPen
+    ic = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256, 512, 1024):
+        img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inset = size * 0.06                               # the margin macOS icons conventionally keep
+        box = QRectF(inset, inset, size - 2 * inset, size - 2 * inset)
+        tile = QLinearGradient(box.topLeft(), box.bottomRight())
+        tile.setColorAt(0.0, QColor("#1E1840"))           # a violet sheen in the corner, into near-black
+        tile.setColorAt(0.55, QColor("#0C0E18"))
+        tile.setColorAt(1.0, QColor("#07130F"))
+        edge = QLinearGradient(box.topLeft(), box.bottomRight())
+        edge.setColorAt(0.0, QColor(0, 255, 204, 150))
+        edge.setColorAt(1.0, QColor(177, 76, 255, 150))
+        stroke = max(1.0, size * 0.018)
+        p.setPen(QPen(edge, stroke) if size >= 32 else Qt.PenStyle.NoPen)
+        p.setBrush(tile)
+        half = stroke / 2
+        p.drawRoundedRect(box.adjusted(half, half, -half, -half), box.width() * 0.23, box.height() * 0.23)
+        glyph = size * 0.58
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="url(#neon)" '
+               f'stroke-width="{2.1 if size >= 64 else 2.5}" stroke-linecap="round" stroke-linejoin="round">'
+               f'<defs><linearGradient id="neon" x1="5" y1="3" x2="19" y2="21" gradientUnits="userSpaceOnUse">'
+               f'<stop offset="0" stop-color="#00FFCC"/><stop offset="1" stop-color="#B14CFF"/></linearGradient></defs>'
+               f'{_P["shield"]}</svg>')
+        QSvgRenderer(QByteArray(svg.encode())).render(
+            p, QRectF((size - glyph) / 2, (size - glyph) / 2 + size * 0.01, glyph, glyph))
+        p.end()
+        ic.addPixmap(QPixmap.fromImage(img))
+    return ic
 
 
 def icon(name: str, color: str, size: int = 20) -> QIcon:

@@ -42,6 +42,9 @@ class FakeS3:
     def generate_presigned_url(self, op, Params, ExpiresIn):
         return f"https://{Params['Bucket']}.example/{Params['Key']}?sig=x"
 
+    def delete_object(self, Bucket, Key):
+        FakeS3.store.pop((Bucket, Key), None)
+
 
 @pytest.fixture
 def fake_cloud(monkeypatch):
@@ -234,3 +237,45 @@ def test_big_file_without_cloud_storage_is_refused_up_front(people, tmp_path):
         vs.protect(str(big), owner, dispatcher=CloudDispatcher(targets=[]))
     assert not os.listdir(paths.tmp_dir())                          # refused before any work or temp files
     assert "protect_" not in " ".join(os.listdir(paths.tmp_dir()))
+
+
+def _two_buckets():
+    return [{"name": "a", "bucket": "b1", "access_key": "k", "secret_key": "s"},
+            {"name": "b", "bucket": "b2", "access_key": "k", "secret_key": "s"}]
+
+
+def test_deleting_a_files_cloud_pieces_removes_every_one(people, tmp_path, fake_cloud):
+    owner = _owner_with_keys()
+    disp = CloudDispatcher(targets=_two_buckets(), client_factory=FakeS3)
+    res = vs.protect(_src(tmp_path, 40_000), owner, dispatcher=disp)
+    refs = vs.cloud_pieces(res.entry, owner["private_key"])
+    assert len(refs) == 11 and {(r["target"], r["key"]) for r in refs}          # read from the sealed package
+    assert len(FakeS3.store) == 11
+    out = vs.delete_cloud_pieces(res.entry, owner["private_key"], dispatcher=disp)
+    assert out == {"total": 11, "deleted": 11, "problems": []} and FakeS3.store == {}
+    assert os.path.exists(res.entry["ghost_map_path"])                          # the local package is not touched
+
+
+def test_pieces_that_cannot_be_deleted_are_reported_not_ignored(people, tmp_path, fake_cloud):
+    owner = _owner_with_keys()
+    disp = CloudDispatcher(targets=_two_buckets(), client_factory=FakeS3)
+    res = vs.protect(_src(tmp_path, 40_000), owner, dispatcher=disp)
+
+    class Refuses(FakeS3):
+        def delete_object(self, Bucket, Key):
+            if Bucket == "b2":
+                raise PermissionError("AccessDenied")
+            super().delete_object(Bucket, Key)
+    only_a = CloudDispatcher(targets=[_two_buckets()[0]], client_factory=FakeS3)    # account "b" removed from Settings
+    out = vs.delete_cloud_pieces(res.entry, owner["private_key"], dispatcher=only_a)
+    assert out["deleted"] < out["total"] and any("no longer set up" in p for p in out["problems"])
+    out = vs.delete_cloud_pieces(res.entry, owner["private_key"],
+                                 dispatcher=CloudDispatcher(targets=_two_buckets(), client_factory=Refuses))
+    assert out["problems"] and all("refused" in p for p in out["problems"])
+
+
+def test_a_file_kept_entirely_in_its_package_has_nothing_in_the_cloud(people, tmp_path):
+    owner = _owner_with_keys()
+    res = vs.protect(_src(tmp_path, 20_000), owner, dispatcher=CloudDispatcher(targets=[]))
+    assert vs.delete_cloud_pieces(res.entry, owner["private_key"], dispatcher=CloudDispatcher(targets=[])) == \
+        {"total": 0, "deleted": 0, "problems": []}

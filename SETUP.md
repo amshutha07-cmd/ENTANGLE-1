@@ -16,7 +16,7 @@ Parts B–D make it real (cloud storage, a public relay, two users).
 | `relay/Dockerfile`, `render.yaml` | **Written, never built** (no Docker here). Expect to fix small things on first build. |
 | Windows / Linux | **Code is portable but I only ran it on macOS.** |
 | Real human clicking the UI | **Not done on real hardware.** 53 automated tests (including 7 that drive the real window offscreen) pass, and every screen was rendered and inspected, but nobody has yet used it on a real desktop. |
-| NFC card | Works with your Arduino+PN532 as before, but the card is a **copyable static secret** until you buy NTAG 424 DNA. |
+| NFC card | Works with your Arduino+PN532. With reader firmware v2 each card is locked with its own key, so an ordinary reader can't read it; a specialist Mifare-cracking tool still can. **Real protection needs NTAG 424 DNA cards.** |
 | TPM backend | Written for Linux, **never run on a real TPM**. On Windows/macOS the OS keychain is used (that is not a TPM). |
 | Blockchain contracts | **Optional, off by default.** Compiled and tested on a local EVM only; not deployed. |
 | Patent PDF/TXT | Stale. Re-export from the corrected `.md` before filing. |
@@ -73,6 +73,25 @@ The address is `https://<this-computer>.<your-tailnet>.ts.net` and stays the sam
 once. Only the computer running the relay needs Tailscale; everyone else just uses the address. The first time, Funnel may
 need to be allowed for your tailnet: the launcher prints Tailscale's link to switch it on.
 
+Once it works, you can make it start by itself whenever you log in (macOS, Windows and Linux):
+
+```bash
+python3 run_relay.py --tailscale --install-autostart    # starts now and at every login; restarts if it stops
+python3 run_relay.py --remove-autostart                 # undo
+```
+
+On a Mac, if this folder is on your Desktop, in Documents or Downloads (which macOS does not let login items read), the
+relay runs from a copy in `~/Library/Application Support/ANSX Relay` with its own data folder; run the command again
+after updating the app to refresh that copy.
+
+The log is in `~/Library/Logs/ANSX Relay/relay.log` on a Mac (Windows: `.ansx_vault\relay.log` in your user folder; Linux:
+`journalctl --user -u ansx-relay`). The relay is only reachable while this computer is on and awake.
+
+The permanent address is also written to `default_config.json` in this folder. The app uses it when nobody has entered
+an address yet, and `pyinstaller ANSxVault.spec` builds it into the installer, so people you give that installer to never
+type an address. The file is in `.gitignore`: commit it (`git add -f default_config.json`) only if you want everyone who
+can see the repository to have your relay's address.
+
 Then in another terminal: `python3 main.py`. To check that an installation is healthy at any time:
 `python3 main.py --self-test` (or `ANSxVault --self-test` for the packaged app).
 
@@ -97,10 +116,14 @@ Why: the point of 12 shards is that no single place holds them all. Use **two or
    *(Advanced: the app stores this in `~/.ansx_vault/storage_targets.json` with owner-only permissions; you can also edit it by hand.)*
 5. **Add a second provider** (recommended). AWS S3:
    - S3 → Create bucket (region near you), keep **Block all public access = ON**.
-   - IAM → Users → Create user → attach an inline policy allowing only `s3:PutObject` and `s3:GetObject` on `arn:aws:s3:::YOUR-BUCKET/*` → Security credentials → Create access key.
+   - IAM → Users → Create user → attach an inline policy allowing only `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::YOUR-BUCKET/*` (delete lets the app clean up when you remove a file) → Security credentials → Create access key.
    - Add a second object to the JSON list: `{"name":"aws-eu","bucket":"YOUR-BUCKET","region":"eu-west-1","access_key":"...","secret_key":"..."}` (omit `endpoint_url`).
    Shard *i* goes to target *i mod number-of-targets*, so 2 targets = 6+5 shards each.
-6. **Try it**: **Protect** → drop a small file. The result should say *“11 pieces are in your cloud storage”*. Then look in the bucket dashboard: you should see objects named `<random>/s01.bin` … `s11.bin`.
+6. **Removing a file** from your vault can also delete its pieces from your cloud storage (the checkbox in the
+   Remove dialog). Your local copy is only removed once every piece is gone; if a key cannot delete, the file stays
+   listed and the app says which account refused. If someone has not picked the file up yet, the box starts unticked,
+   because they need those pieces to open it.
+7. **Try it**: **Protect** → drop a small file. The result should say *“11 pieces are in your cloud storage”*. Then look in the bucket dashboard: you should see objects named `<random>/s01.bin` … `s11.bin`.
    - `0 in cloud… no cloud storage configured` → the JSON file is missing/unreadable (check path and that it's valid JSON).
    - `uploads FAILED: AccessDenied` → wrong keys or the token isn't scoped to that bucket.
    - `SignatureDoesNotMatch` → wrong secret key or wrong `endpoint_url`/region.
@@ -171,13 +194,37 @@ Render's free tier has no persistent disk, so use a small VPS (Hetzner, DigitalO
 
 ---
 
+## Everyday use
+
+- **Closing the window keeps the app running** in the menu bar / system tray, so files still arrive and you get a
+  notification. It keeps receiving until it locks (Settings → Lock automatically). Quit from the tray icon or with
+  ⌘Q / Ctrl+Q. Prefer the old behaviour? Settings → *When you close the window* → *Quit the app*.
+- **Several files, several people:** on Send, hold ⌘ (Ctrl on Windows) or Shift to pick several files and several
+  people; each file goes to each person, one after another, with a summary at the end.
+- **Something wrong?** Settings → Security details → *Save a support report…* (or Help → Save a Support Report). It
+  saves a zip with app and system facts and the recent log. It has no keys, passphrases, file contents or storage
+  secrets; look through it before you share it.
+
+---
+
 ## Part E — NFC hardware (what you have now)
 
 1. Arduino + PN532 wired over I²C (IRQ→D2, RESET→D3, as in `arduino_nfc/arduino_nfc.ino`).
 2. Arduino IDE → install **Adafruit PN532** library → upload the sketch. **Close the Serial Monitor** afterwards (only one program can hold the port).
-3. Use **MIFARE Classic 1K** cards. The app writes a 16-character secret to block 4.
+   **Already have a reader?** Upload the sketch again after updating the app: firmware **v2** is what locks cards and
+   refuses a swapped card. The app still works with the old firmware, but logs *"The reader runs old firmware"*.
+3. Use **MIFARE Classic 1K** cards. The app writes a 16-character secret to block 4 and locks that sector with a key made
+   from the card's ID and this computer's protected secret. Cards set up before firmware v2 are locked automatically the
+   next time you log in with them (keep the card on the reader until "Protecting your card…" finishes).
 4. If the app says no reader: Windows → Device Manager shows a COM port; Linux → add yourself to `dialout` (`sudo usermod -aG dialout $USER`, re-login); macOS → `/dev/cu.usb*`.
-5. **Known weakness**: anyone who can touch the card with a reader can copy it. When you get NTAG 424 DNA cards, the firmware and `nfc_serial.py` need a challenge-response rewrite — tell me and I'll do that part.
+5. What firmware v2 protects against:
+   - **A card swapped** between the check and the write during setup: the write names the card it checked, and the
+     reader refuses any other card.
+   - **Reading the card with an ordinary reader or phone app**: they use the factory key and get nothing.
+   - **The reader getting stuck**: every wait for a card has a time limit, and Cancel works.
+6. **Known weakness**: Mifare Classic's own encryption is broken. Someone who gets hold of your card and has a
+   specialist tool (e.g. a Proxmark) can still recover its key and copy it within minutes. NTAG 424 DNA cards fix this
+   with a real challenge-response; when you get them, the firmware and `nfc_serial.py` need that rewrite.
 
 ---
 

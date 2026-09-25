@@ -5,12 +5,12 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
 )
 
 import cloud_dispatcher
-from ui import icons, theme
-from ui.widgets import clear_layout, Banner, Button, IconBadge, label, polish
+from ui import icons, motion, theme
+from ui.widgets import clear_layout, Banner, Button, IconBadge, label, add_reveal_toggle
 
 
 def confirm(parent, title: str, text: str, ok: str = "Confirm", danger: bool = False, cancel: str = "Cancel") -> bool:
@@ -42,6 +42,56 @@ def confirm(parent, title: str, text: str, ok: str = "Confirm", danger: bool = F
     return dlg.exec() == QDialog.DialogCode.Accepted
 
 
+def confirm_remove(parent, name: str, cloud_pieces: int, waiting: list) -> Optional[bool]:
+    """
+    Removing a protected file. Returns None (cancelled), True (also delete its pieces from cloud storage) or False
+    (only from this computer). If someone has not picked the file up yet, deleting its cloud pieces would stop them
+    from ever opening it, so that option starts unticked and the dialog says who is still waiting.
+    """
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Remove from your vault?")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(460)
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(24, 24, 24, 20)
+    lay.setSpacing(14)
+    head = QHBoxLayout()
+    head.setSpacing(14)
+    head.addWidget(IconBadge("trash", "danger", 44), 0, Qt.AlignmentFlag.AlignTop)
+    col = QVBoxLayout()
+    col.addWidget(label(f"Remove “{name}”?", "h2"))
+    if cloud_pieces:
+        col.addWidget(label(f"Its package is deleted from this computer. {cloud_pieces} of its 12 pieces are in your "
+                            "cloud storage.", "body"))
+    else:
+        col.addWidget(label("Its package, which holds all of its pieces, is deleted from this computer. "
+                            "Nothing of it is left in cloud storage.", "body"))
+    head.addLayout(col, 1)
+    lay.addLayout(head)
+    box = None
+    if cloud_pieces:
+        box = QCheckBox("Also delete its pieces from my cloud storage (this can't be undone)")
+        box.setChecked(not waiting)
+        lay.addWidget(box)
+        if waiting:
+            who = ", ".join(waiting)
+            lay.addWidget(Banner(f"{who} {'has' if len(waiting) == 1 else 'have'} not picked it up yet. Deleting the "
+                                 f"cloud pieces would mean they can never open it.", "warning"))
+    row = QHBoxLayout()
+    row.addStretch()
+    no = Button("Cancel", "secondary")
+    yes = Button("Remove", "danger", "trash")
+    no.clicked.connect(dlg.reject)
+    yes.clicked.connect(dlg.accept)
+    no.setDefault(True)
+    row.addWidget(no)
+    row.addWidget(yes)
+    lay.addLayout(row)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return bool(box is not None and box.isChecked())
+
+
 def info(parent, title: str, text: str, kind: str = "info") -> None:
     dlg = QDialog(parent)
     dlg.setWindowTitle(title)
@@ -67,13 +117,136 @@ def info(parent, title: str, text: str, kind: str = "info") -> None:
     dlg.exec()
 
 
+class VerifyDialog(QDialog):
+    """
+    Compare a key fingerprint with its owner, one group of 8 characters at a time. Reading 64 characters in one go
+    over the phone invites a skim and a "yes"; eight small, numbered checks do not. Nothing is shortened: every
+    group is compared, so the check is exactly as strong as before.
+    """
+
+    def __init__(self, parent, name: str, fingerprint: str):
+        super().__init__(parent)
+        self.name, self.groups = name, fingerprint.split()
+        self.index, self.mismatch = 0, False
+        self.setWindowTitle(f"Verify {name}'s key")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 24, 26, 20)
+        lay.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        self.badge = IconBadge("key", "primary", 44)
+        head.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout()
+        self.title = label(f"Compare {name}'s key with them", "h2")
+        self.intro = label(f"Call {name} or meet them. Ask them to open People & keys and read out THEIR OWN "
+                           "fingerprint, one group at a time. Check each group against the one shown here.", "muted")
+        col.addWidget(self.title)
+        col.addWidget(self.intro)
+        head.addLayout(col, 1)
+        lay.addLayout(head)
+
+        self.step = label("", "eyebrow", wrap=False)
+        self.step.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.step)
+        self.group = QLabel()
+        self.group.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.group.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        f = self.group.font()
+        f.setFamily(theme.mono_family())
+        f.setPixelSize(34)
+        f.setBold(True)
+        f.setLetterSpacing(f.SpacingType.AbsoluteSpacing, 3)
+        self.group.setFont(f)
+        lay.addWidget(self.group)
+        self.dots = QHBoxLayout()
+        self.dots.setSpacing(8)
+        self.dots.addStretch()
+        self._dots = []
+        for _ in self.groups:
+            d = QLabel()
+            d.setFixedSize(10, 10)
+            self._dots.append(d)
+            self.dots.addWidget(d)
+        self.dots.addStretch()
+        lay.addLayout(self.dots)
+        self.warning = Banner("", "danger")
+        self.warning.hide()
+        lay.addWidget(self.warning)
+
+        row = QHBoxLayout()
+        self.cancel_btn = Button("Cancel", "ghost")
+        self.cancel_btn.clicked.connect(self.reject)
+        self.no_btn = Button("It doesn't match", "danger", "x")
+        self.no_btn.clicked.connect(self._no)
+        self.yes_btn = Button("It matches", "primary", "check")
+        self.yes_btn.clicked.connect(self._yes)
+        # Deliberately NO default button: holding down Enter must not "confirm" eight groups nobody compared.
+        for b in (self.cancel_btn, self.no_btn, self.yes_btn):
+            b.setAutoDefault(False)
+            b.setDefault(False)
+        row.addWidget(self.cancel_btn)
+        row.addStretch()
+        row.addWidget(self.no_btn)
+        row.addWidget(self.yes_btn)
+        lay.addLayout(row)
+        self._show()
+
+    def _show(self) -> None:
+        n = len(self.groups)
+        self.step.setText(f"GROUP {self.index + 1} OF {n}")
+        self.group.setText(self.groups[self.index] if self.groups else "")
+        for i, d in enumerate(self._dots):
+            col = theme.color("success") if i < self.index else theme.color("primary") if i == self.index \
+                else theme.color("border_strong")
+            d.setStyleSheet(f"background: {col}; border-radius: 5px;")
+
+    def _yes(self) -> None:
+        if self.index + 1 < len(self.groups):
+            self.index += 1
+            self._show()
+            motion.fade_in(self.group, motion.FAST)       # a visible change, so nobody misses that it moved on
+        else:
+            self.accept()                                  # every group matched
+
+    def _no(self) -> None:
+        self.mismatch = True
+        self.badge.set("alert", "danger")
+        self.title.setText("Stop: the keys don't match")
+        self.intro.setText("")
+        self.intro.hide()
+        self.step.hide()
+        self.group.hide()
+        for d in self._dots:
+            d.hide()
+        self.warning.set(f"The key you have for {self.name} is not the key {self.name} has. Someone may be pretending "
+                         f"to be them. Don't send them anything sensitive or open files from them until you have "
+                         f"sorted this out in person.", "danger")
+        self.warning.show()
+        self.no_btn.hide()
+        self.yes_btn.hide()
+        self.cancel_btn.setText("Close")
+        self.cancel_btn.set_variant("secondary")
+        self.adjustSize()
+
+
+def verify_fingerprint(parent, name: str, fingerprint: str) -> bool:
+    """True only if the person confirmed every group. A mismatch shows a warning and returns False."""
+    if len(fingerprint.split()) < 2:                      # not in groups: fall back to a single comparison
+        return confirm(parent, "Confirm fingerprint",
+                       f"Did {name} read you exactly this fingerprint, over a channel you trust?\n\n{fingerprint}",
+                       ok="Yes, it matches")
+    return VerifyDialog(parent, name, fingerprint).exec() == QDialog.DialogCode.Accepted
+
+
 HELP = {
     "r2": ("In Cloudflare open R2 → your bucket. Create an API token under R2 → Manage API Tokens with "
            "“Object Read & Write” for this bucket only. The Account ID is on the R2 overview page."),
     "b2": ("In Backblaze open B2 → Buckets → your bucket (keep it Private). Create an Application Key for "
            "that bucket with Read and Write. The region is inside the bucket's endpoint, e.g. s3.us-west-004… → us-west-004."),
-    "s3": ("Create a private bucket and an IAM user allowed only s3:PutObject and s3:GetObject on it, "
-           "then create an access key for that user."),
+    "s3": ("Create a private bucket and an IAM user allowed only s3:PutObject, s3:GetObject and s3:DeleteObject "
+           "on it (delete lets “Remove” clean up a file's pieces), then create an access key for that user."),
     "custom": "Enter the S3 endpoint your provider gives you, plus the bucket name and an access key with read and write access.",
 }
 
@@ -97,7 +270,7 @@ class StorageDialog(QDialog):
 
         form = QFormLayout()
         form.setSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)   # level with each box
         self.provider = QComboBox()
         for key, meta in cloud_dispatcher.PROVIDERS.items():
             self.provider.addItem(meta["label"], key)
@@ -108,6 +281,7 @@ class StorageDialog(QDialog):
         self.access = QLineEdit()
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.secret)
         self.account = QLineEdit()
         self.account.setPlaceholderText("32 characters")
         self.region = QLineEdit()

@@ -10,10 +10,12 @@ from PyQt6.QtWidgets import (
 )
 
 from security_core import SecurityCore
-from ui import icons, theme
+from ui import art, motion, theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
+    add_reveal_toggle, escape_goes_back,
+    FitStack,
     Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish,
 )
 
@@ -60,7 +62,7 @@ def brand_header() -> QWidget:
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 6)
     lay.setSpacing(8)
-    lay.addWidget(IconBadge("shield", "primary", 56), 0, Qt.AlignmentFlag.AlignHCenter)
+    lay.addWidget(art.Illustration("shield", 104), 0, Qt.AlignmentFlag.AlignHCenter)   # the mascot says hello
     t = label("A.N.Sx Vault", "display", wrap=False)
     t.setAlignment(Qt.AlignmentFlag.AlignCenter)
     s = label("Send files that only the right person can open.", "muted", wrap=False)
@@ -80,7 +82,7 @@ class LoginView(_Center):
         c.addStretch(1)
         c.addWidget(brand_header())
 
-        card = Card(padding=22, spacing=14)
+        card = self.card = Card(padding=22, spacing=14)
         self.heading = label("Welcome back", "h1", wrap=False)
         card.body.addWidget(self.heading)
         card.body.addWidget(label("Who is unlocking the vault?", "muted"))
@@ -104,6 +106,7 @@ class LoginView(_Center):
         pl.addLayout(top)
         self.pass_edit = QLineEdit()
         self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pass_edit)
         self.pass_edit.setPlaceholderText("Your passphrase")
         self.pass_edit.returnPressed.connect(self._unlock)
         pl.addWidget(self.pass_edit)
@@ -136,6 +139,7 @@ class LoginView(_Center):
         self.error.setVisible(bool(text))
 
     def refresh(self) -> None:
+        self.pass_edit.hide_passphrase()
         self.people.clear()
         for name in self.ctl.operators():
             mode = self.ctl.auth_mode(name)
@@ -195,6 +199,7 @@ class LoginView(_Center):
         self._job = None
         self._busy(False)
         self.pass_edit.clear()
+        self.pass_edit.hide_passphrase()
         self.ctl.begin_session(name)
 
     def _fail(self, message: str) -> None:
@@ -204,6 +209,7 @@ class LoginView(_Center):
         self.pass_edit.selectAll()
         self._picked()
         self._err(message)
+        motion.shake(self.card)                               # "that's not right", without a dialog in the way
 
     def _cancelled(self) -> None:
         self._job = None
@@ -241,10 +247,12 @@ class CreateView(_Center):
         c.addStretch(1)
         c.addWidget(brand_header())
         self.stepper = Stepper(["Your name", "How you unlock", "Create"])
+        self.stepper.step_clicked.connect(self._step_clicked)
         c.addWidget(self.stepper)
+        escape_goes_back(self, self._escape_back)
 
         self.card = Card(padding=24, spacing=14)
-        self.stack = QStackedWidget()
+        self.stack = FitStack()                         # the card fits the current step instead of the tallest one
         self.card.body.addWidget(self.stack)
         c.addWidget(self.card)
 
@@ -293,9 +301,11 @@ class CreateView(_Center):
         pb.setSpacing(8)
         self.pw1 = QLineEdit()
         self.pw1.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pw1)
         self.pw1.setPlaceholderText("Passphrase (at least 12 characters, a short sentence works well)")
         self.pw2 = QLineEdit()
         self.pw2.setEchoMode(QLineEdit.EchoMode.Password)
+        add_reveal_toggle(self.pw2)
         self.pw2.setPlaceholderText("Type it again")
         self.pw_strength = Pill("", "neutral")
         self.pw_strength.hide()
@@ -312,6 +322,8 @@ class CreateView(_Center):
         l1.addStretch()
         self.pw1.textChanged.connect(self._pw_changed)
         self.pw2.textChanged.connect(self._pw_changed)
+        self.pw1.returnPressed.connect(self.pw2.setFocus)            # Enter moves on, like a form should
+        self.pw2.returnPressed.connect(lambda: self.next_btn.isEnabled() and self._next())
         self.stack.addWidget(s1)
 
         # step 2 — creating / done
@@ -426,6 +438,8 @@ class CreateView(_Center):
 
     # navigation
     def start(self, first_run: bool) -> None:
+        self.pw1.hide_passphrase()
+        self.pw2.hide_passphrase()
         self.name_edit.clear()
         self.pw1.clear()
         self.pw2.clear()
@@ -441,6 +455,7 @@ class CreateView(_Center):
         self.step = i
         self.stack.setCurrentIndex(i)
         self.stepper.set_current(i)
+        self.stepper.clickable = i == 1                     # step 3 is creating / created: no way back
         self.back_btn.setVisible(i < 2 and (i > 0 or bool(self.ctl.operators())))
         self.next_btn.setVisible(i < 2)
         self.next_btn.setText("Continue" if i == 0 else "Create my identity")
@@ -454,6 +469,14 @@ class CreateView(_Center):
             self._back_to_login()
         else:
             self._go(self.step - 1)
+
+    def _escape_back(self) -> None:
+        if self._job is None and (self.step == 1 or (self.step == 0 and self.ctl.operators())):
+            self._back()
+
+    def _step_clicked(self, i: int) -> None:
+        if self.step == 1 and self._job is None:            # once creating has started there is no going back
+            self._go(i)
 
     def _next(self) -> None:
         if not self._valid():
@@ -483,7 +506,7 @@ class CreateView(_Center):
         self.create_title.setText("You're all set")
         self.create_detail.setText(f"Welcome, {name}. Your keys were created and protected on this computer.")
         self.fp.set(self.ctl_fp(name))
-        self.done_box.show()
+        motion.reveal(self.done_box, motion.SLOW)
         self.stepper.set_current(3)
         self.next_btn.setText("Open my vault")
         self.next_btn.setVisible(True)
@@ -510,7 +533,8 @@ class CreateView(_Center):
         self.create_title.setText("We could not create your identity")
         self.create_detail.setText("")
         self.error_banner.set(message, "danger")
-        self.error_banner.show()
+        motion.reveal(self.error_banner)
+        motion.shake(self.card)
         self.back_btn.show()
         self.next_btn.hide()
 

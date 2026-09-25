@@ -293,6 +293,24 @@ def open_package(package_path: str, private_pem: str) -> dict:
         raise VaultError("That file is not a valid secure package.") from exc
 
 
+def cloud_pieces(entry: dict, private_pem: str) -> list[dict]:
+    """Where this file's pieces are in cloud storage ({"target", "key"} each). The list is sealed in the package."""
+    manifest = open_package(entry["ghost_map_path"], private_pem)
+    return [dict(ref) for _i, ref in sorted((manifest.get("cloud_refs") or {}).items(), key=lambda kv: int(kv[0]))]
+
+
+def delete_cloud_pieces(entry: dict, private_pem: str, dispatcher: Optional[CloudDispatcher] = None) -> dict:
+    """
+    Delete a protected file's pieces from cloud storage. Returns {"total", "deleted", "problems"}. The local package is
+    left alone: it is the only record of where the pieces are, so it must survive until every piece is really gone.
+    """
+    refs = cloud_pieces(entry, private_pem)
+    if not refs:
+        return {"total": 0, "deleted": 0, "problems": []}
+    deleted, problems = (dispatcher or CloudDispatcher()).delete(refs)
+    return {"total": len(refs), "deleted": deleted, "problems": problems}
+
+
 def rewrap_for(entry: dict, identity: dict, receiver_public_pem: str,
                dispatcher: Optional[CloudDispatcher] = None, dest_dir: Optional[str] = None) -> str:
     """

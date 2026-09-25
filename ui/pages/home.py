@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 import platform_secret
 from ui import icons, theme
 from ui.pages.base import Page
-from ui.widgets import clear_layout, Banner, Button, Card, ClickableCard, EmptyState, IconBadge, Pill, label, time_ago
+from ui.widgets import Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, clear_layout, label, time_ago
 
 ACTIVITY_STYLE = {
     "protected": ("shield", "success"), "sent": ("send", "primary"), "delivered": ("check", "success"),
@@ -30,7 +30,9 @@ class ActionCard(ClickableCard):
         row.addWidget(self.pill)
         self.body.addLayout(row)
         self.body.addWidget(label(title, "h2", wrap=False))
-        self.body.addWidget(label(text, "muted"))
+        self.default_text = text
+        self.text = label(text, "muted")                  # replaced by live status when there is some
+        self.body.addWidget(self.text)
 
 
 class StatusTile(Card):
@@ -81,22 +83,25 @@ class HomePage(Page):
         self.checklist = Card(padding=18, spacing=8)
         self.check_rows: dict[str, QLabel] = {}
         self.checklist.body.addWidget(label("Finish setting up", "h2", wrap=False))
-        self.checklist.body.addWidget(label("A couple of quick steps and everything works end to end.", "muted"))
-        for key, text in (("relay", "Connect to a relay so people can reach you"),
-                          ("storage", "Add cloud storage for larger files (recommended)"),
-                          ("verify", "Verify a friend's key so you know it's really them")):
+        self.check_progress = label("", "muted")
+        self.checklist.body.addWidget(self.check_progress)
+        self.check_actions: dict[str, Button] = {}
+        self.check_texts: dict[str, QLabel] = {}
+        for key, text, action, icon, page in (
+                ("relay", "Connect to a relay so people can reach you", "Connect", "wifi", "settings"),
+                ("storage", "Add cloud storage for larger files (recommended)", "Add storage", "cloud", "settings"),
+                ("verify", "Verify a friend's key so you know it's really them", "Verify someone", "key", "contacts")):
             r = QHBoxLayout()
             ic = QLabel()
             self.check_rows[key] = ic
             r.addWidget(ic)
-            r.addWidget(label(text, "body"), 1)
+            self.check_texts[key] = label(text, "body")
+            r.addWidget(self.check_texts[key], 1)
+            b = Button(action, "secondary", icon, "sm")
+            b.clicked.connect(lambda _c=False, p=page: self.navigate.emit(p))
+            self.check_actions[key] = b
+            r.addWidget(b)
             self.checklist.body.addLayout(r)
-        btns = QHBoxLayout()
-        self.setup_btn = Button("Open settings", "primary", "settings", "sm")
-        self.setup_btn.clicked.connect(lambda: self.navigate.emit("settings"))
-        btns.addWidget(self.setup_btn)
-        btns.addStretch()
-        self.checklist.body.addLayout(btns)
         self.root.addWidget(self.checklist)
 
         tiles = QHBoxLayout()
@@ -115,13 +120,19 @@ class HomePage(Page):
         self.root.addWidget(self.activity)
         self.root.addStretch(1)
 
-        ctl.relay_state_changed.connect(lambda *_: self.refresh())
-        ctl.inbox_changed.connect(lambda *_: self.refresh())
+        ctl.relay_state_changed.connect(self._changed)      # bound methods: disconnected with the page
+        self.refresh_while_visible(self._fill_activity)
+        ctl.inbox_changed.connect(self._changed)
+        ctl.outbox_changed.connect(self._changed)             # "last sent …" on the Send tile
+        ctl.vault_changed.connect(self._changed)              # "N files protected" on the Protect tile
         ctl.activity_changed.connect(self.refresh)
         ctl.vault_changed.connect(self.refresh)
         ctl.contacts_changed.connect(self.refresh)
 
     def on_show(self) -> None:
+        self.refresh()
+
+    def _changed(self, *_a) -> None:
         self.refresh()
 
     def refresh(self) -> None:
@@ -132,6 +143,7 @@ class HomePage(Page):
         n = len(ctl.inbox)
         self.card_inbox.pill.setVisible(bool(n))
         self.card_inbox.pill.set(f"{n} waiting", "primary")
+        self._tile_status(n)
 
         state, msg = ctl.relay_state, ctl.relay_message
         rt = self.tile_relay
@@ -158,25 +170,56 @@ class HomePage(Page):
             backend = platform_secret.backend_name()
         except Exception:
             backend = "file"
-        where = {"tpm2": "your computer's TPM chip", "keyring": "your system's secure storage",
-                 "file": "a protected file (weaker)"}.get(backend, backend)
-        self.tile_security.set("Card unlock" if mode == "nfc" else "Passphrase unlock",
-                               f"Your keys are protected by {where}.", "success" if backend != "file" else "warning", "shield")
+        where = {"tpm2": "Keys are sealed by this computer's TPM chip.",
+                 "keyring": "Keys are sealed in your system's secure storage.",
+                 "file": "Keys are sealed in a file on this computer (less protected than a keychain)."}.get(
+            backend, f"Keys are sealed by {backend}.")
+        self.tile_security.set("Card unlock" if mode == "nfc" else "Passphrase unlock", where,
+                               "success" if backend != "file" else "warning", "shield")
 
         verified = any(c.get("verified") for c in ctl.contacts())
         done = {"relay": state == "online", "storage": bool(targets), "verify": verified}
         for key, ic in self.check_rows.items():
             ic.setPixmap(icons.pixmap("check" if done[key] else "clock", theme.color("success" if done[key] else "text_faint"), 18))
+            self.check_actions[key].setVisible(not done[key])
+            self.check_texts[key].setProperty("role", "muted" if done[key] else "body")
+            self.check_texts[key].style().polish(self.check_texts[key])
+        n = sum(done.values())
+        self.check_progress.setText(f"{n} of {len(done)} done. Each step takes a minute or two.")
         self.checklist.setVisible(not (done["relay"] and done["storage"]))
 
         self._fill_activity()
+
+    def _tile_status(self, waiting: int) -> None:
+        """The three big tiles double as a status line: what is protected, what went out last, what is waiting."""
+        ctl = self.ctl
+        n = len(ctl.vault_entries()) if ctl.operator else 0
+        self.card_protect.text.setText(f"{n} file{'s' if n != 1 else ''} protected. Add more any time."
+                                       if n else self.card_protect.default_text)
+        latest = max(ctl.outbox or [], key=lambda o: o.get("created", 0), default=None)
+        if latest:
+            what, when = ctl.sent_file_name(latest["id"]), time_ago(latest["created"])
+            self.card_send.text.setText(f"Last: {what} to {latest['to']}, {when}." if what
+                                        else f"Last sent to {latest['to']}, {when}.")
+        else:
+            self.card_send.text.setText(self.card_send.default_text)
+        self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} waiting for you to accept."
+                                     if waiting else
+                                     (f"Nothing new. People send to your name, {ctl.operator}." if ctl.operator
+                                      else self.card_inbox.default_text))
 
     def _fill_activity(self) -> None:
         lay = self.activity.body
         clear_layout(lay)
         items = __import__("activity").recent(8, operator=self.ctl.operator or "")
-        if not items:
-            lay.addWidget(EmptyState("activity", "Nothing yet", "Protect or send your first file and it will show up here."))
+        if not items:                                     # one quiet line, not a tall empty box below the fold
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(12, 10, 12, 10)
+            hl.setSpacing(12)
+            hl.addWidget(IconBadge("activity", "neutral", 34))
+            hl.addWidget(label("Nothing yet. Files you protect, send and receive will show up here.", "muted"), 1)
+            lay.addWidget(row)
             return
         for it in items:
             icon, kind = ACTIVITY_STYLE.get(it["kind"], ("info", "neutral"))
@@ -187,9 +230,9 @@ class HomePage(Page):
             hl.addWidget(IconBadge(icon, kind, 34))
             col = QVBoxLayout()
             col.setSpacing(0)
-            col.addWidget(label(it["title"], "body", wrap=False))
+            col.addWidget(ElidedLabel(it["title"], "body"))
             if it.get("detail"):
-                col.addWidget(label(it["detail"], "muted", wrap=False))
+                col.addWidget(ElidedLabel(it["detail"], "muted"))
             hl.addLayout(col, 1)
             hl.addWidget(label(time_ago(it["ts"]), "faint", wrap=False))
             lay.addWidget(row)

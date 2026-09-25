@@ -13,16 +13,17 @@ from PyQt6.QtWidgets import (
 
 from relay_client import RelayError
 from ui.controller import Job
-from ui.dialogs import confirm
+from ui.dialogs import confirm, verify_fingerprint
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
+from ui import motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill, ProgressPanel,
     human_size, label, time_ago,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
-              "unknown": ("New sender", "neutral"), "changed": ("Key changed", "danger")}
+              "unknown": ("New sender", "warning"), "changed": ("Key changed", "danger")}
 SENT_PILL = {"uploading": ("Uploading", "info"), "ready": ("Waiting for pickup", "warning"),
              "delivered": ("Delivered", "success"), "rejected": ("Declined", "danger"),
              "expired": ("Expired", "neutral"), "cancelled": ("Cancelled", "neutral")}
@@ -41,12 +42,17 @@ def _days_left(expires: int) -> str:
 
 class InboxPage(Page):
     navigate = pyqtSignal(str)
+    send_to_requested = pyqtSignal(str)                    # "Send a file back" to whoever sent this
 
     def __init__(self, ctl):
         super().__init__(ctl, "Inbox", "Nothing is opened until you accept it.")
         self._job: Optional[Job] = None
         self._current: Optional[dict] = None
 
+        self.add_connection_banner({
+            "offline": "You're offline. Files people send you will appear here as soon as the connection is back.",
+            "conflict": "Receiving is turned off: this relay already has a different key under your name."})
+        self.refresh_while_visible(lambda: self._job is None and self._fill_inbox())   # Sent uses fixed dates
         self.open_btn = Button("Open a package file…", "ghost", "folder", "sm")
         self.open_btn.setToolTip("For a package you received outside the relay (USB stick, chat, e-mail).")
         self.open_btn.clicked.connect(self._open_package)
@@ -84,7 +90,8 @@ class InboxPage(Page):
         self.inbox_list.setMinimumWidth(320)
         self.inbox_list.itemSelectionChanged.connect(self._picked)
         left.body.addWidget(self.inbox_list)
-        self.inbox_empty = EmptyState("inbox", "Inbox is empty", "When someone sends you a file it appears here within seconds.")
+        self.inbox_empty = EmptyState("inbox", "Inbox is empty", "When someone sends you a file it appears here within seconds.",
+                                      "Copy my name", self._copy_my_name)
         left.body.addWidget(self.inbox_empty)
         rl.addWidget(left, 5)
 
@@ -119,6 +126,9 @@ class InboxPage(Page):
         row.addWidget(self.accept_btn, 1)
         row.addWidget(self.decline_btn)
         self.detail.body.addLayout(row)
+        self.reply_btn = Button("Send a file back", "ghost", "send", "sm")
+        self.reply_btn.clicked.connect(lambda: self._current and self.send_to_requested.emit(self._current["from"]))
+        self.detail.body.addWidget(self.reply_btn, 0, Qt.AlignmentFlag.AlignLeft)
         self.detail.body.addStretch()
         rl.addWidget(self.detail, 6)
         self.stack.addWidget(rec)
@@ -159,6 +169,7 @@ class InboxPage(Page):
             b.refresh_icon()
 
     def on_show(self) -> None:
+        self._show_connection(self.ctl.relay_state)
         self._fill_inbox(self.ctl.inbox)
         self._fill_sent(self.ctl.outbox)
 
@@ -191,7 +202,16 @@ class InboxPage(Page):
             self.inbox_list.setCurrentRow(0)
         self.inbox_list.setVisible(bool(items))
         self.inbox_empty.setVisible(not items)
+        if not items and self.ctl.operator:
+            self.inbox_empty.set_text("Inbox is empty", f"People send you files by your name, {self.ctl.operator}. Share it "
+                                                        "with them; a new file appears here within seconds.")
         self._picked()
+
+    def _copy_my_name(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+        if self.ctl.operator:
+            QApplication.clipboard().setText(self.ctl.operator)
+            self.ctl.toast.emit(f"Copied “{self.ctl.operator}”. Send it to the people who will send you files.", "success")
 
     def _picked(self) -> None:
         li = self.inbox_list.currentItem()
@@ -221,15 +241,16 @@ class InboxPage(Page):
             b.set(f"You haven't verified {it['from']}'s key. Compare the fingerprint above with them by phone before "
                   "opening anything sensitive.", "warning")
             b._btn.setVisible(trust == "unverified")
+        # A changed key is the one case where accepting should not be the obvious, highlighted choice.
+        self.accept_btn.set_variant("secondary" if trust == "changed" else "primary")
+        self.accept_btn.setText("Accept anyway" if trust == "changed" else "Accept and open")
         busy = self._job is not None
         self.accept_btn.setEnabled(not busy)
         self.decline_btn.setEnabled(not busy)
 
     def _verify(self) -> None:
         it = self._current
-        if it and confirm(self, "Confirm fingerprint",
-                          f"Did {it['from']} read you exactly this fingerprint, over a channel you trust?\n\n{it.get('sender_fingerprint', '')}",
-                          ok="Yes, it matches"):
+        if it and verify_fingerprint(self, it["from"], it.get("sender_fingerprint", "")):
             self.ctl.verify_contact(it["from"])
             self._picked()
 
@@ -264,8 +285,8 @@ class InboxPage(Page):
         self._last_path = info["path"]
         note, kind = self.ctl.signature_note(info)
         self.result.set(f"Saved “{os.path.basename(info['path'])}” from {info['from']} to your Downloads folder. {note}", kind)
-        self.result.show()
-        self.ctl.toast.emit(f"Received {os.path.basename(info['path'])}.", "success")
+        motion.reveal(self.result)
+        self.notify_if_away(f"Received {os.path.basename(info['path'])}.", "success")
         self._picked()
         open_folder(info["path"])
 
@@ -275,7 +296,7 @@ class InboxPage(Page):
         self.result.set(message, "danger")
         self._last_path = ""
         self.result._btn.hide()
-        self.result.show()
+        motion.reveal(self.result)
         self._picked()
 
     def _cancelled(self) -> None:
@@ -326,8 +347,10 @@ class InboxPage(Page):
             li.setSizeHint(QSize(0, 62))
             li.setData(Qt.ItemDataRole.UserRole, it)
             self.sent_list.addItem(li)
-            self.sent_list.setItemWidget(li, ListRow(f"To {it['to']}", f"{human_size(it['size'])} · {when}",
-                                                     avatar=it["to"], right=right))
+            name = self.ctl.sent_file_name(it["id"])
+            title, sub = ((name, f"To {it['to']} · {human_size(it['size'])} · {when}") if name
+                          else (f"To {it['to']}", f"{human_size(it['size'])} · {when}"))
+            self.sent_list.setItemWidget(li, ListRow(title, sub, avatar=it["to"], right=right))
         self.sent_list.setVisible(bool(items))
         self.sent_empty.setVisible(not items)
         self.cancel_out_btn.hide()

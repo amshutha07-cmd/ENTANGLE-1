@@ -118,6 +118,27 @@ class CloudDispatcher:
         logger.info("[Cloud] Shard %02d stored on '%s'", shard_index + 1, target["name"])
         return url
 
+    def delete(self, refs: list[dict]) -> tuple[int, list[str]]:
+        """
+        Delete stored pieces ({"target", "key"} each, as recorded when they were uploaded). Returns (deleted, problems):
+        a piece whose storage account is no longer set up, or that the account refuses to delete, is a problem.
+        Deleting a piece that is already gone counts as deleted (S3 treats it that way too).
+        """
+        by_name = {t["name"]: t for t in self.targets}
+        deleted, problems = 0, []
+        for ref in refs:
+            t = by_name.get(ref.get("target"))
+            if t is None:
+                problems.append(f"“{ref.get('target')}” is no longer set up in Settings")
+                continue
+            try:
+                self._client(t).delete_object(Bucket=t["bucket"], Key=ref["key"])
+                deleted += 1
+            except Exception as exc:
+                problems.append(f"“{t['name']}” refused ({type(exc).__name__}: {exc})")
+                logger.warning("[Cloud] Could not delete %s from %s: %s", ref.get("key"), t["name"], exc)
+        return deleted, problems
+
     def refresh_urls(self, refs: dict) -> dict[int, str]:
         """Re-issue fresh presigned URLs for previously uploaded shards (needs the same credentials)."""
         by_name = {t["name"]: t for t in self.targets}
