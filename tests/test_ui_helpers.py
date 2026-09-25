@@ -157,6 +157,32 @@ def test_status_pills_and_new_file_toast_lead_somewhere():
     assert win.content.currentWidget() is win.pages["inbox"]
 
 
+def test_a_click_between_two_notices_reaches_the_page_underneath():
+    from PyQt6.QtCore import QPoint, Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QPushButton, QWidget
+    from ui.widgets import ToastHost
+    root = QWidget()
+    root.resize(900, 700)
+    under = QPushButton("underneath", root)                  # a button that happens to sit behind the notices
+    under.setGeometry(0, 0, 900, 700)
+    clicks = []
+    under.clicked.connect(lambda: clicks.append(True))
+    host = ToastHost(root)
+    host.show_toast("First notice", "info")
+    host.show_toast("Second notice", "success")
+    root.show()
+    QApplication.processEvents()
+    first, second = host._toasts()
+    gap = host.mapTo(root, QPoint(host.width() // 2, (first.geometry().bottom() + second.geometry().top()) // 2))
+    assert root.childAt(gap) is under                         # the empty space between them is not a wall
+    QTest.mouseClick(root.childAt(gap), Qt.MouseButton.LeftButton, pos=under.mapFrom(root, gap))
+    assert clicks
+    on_first = root.childAt(host.mapTo(root, first.geometry().center()))
+    assert on_first is first or first.isAncestorOf(on_first)  # the notices themselves still take their clicks
+    root.close()
+
+
 def test_passphrase_fields_can_be_revealed():
     from PyQt6.QtWidgets import QLineEdit
     from ui.widgets import add_reveal_toggle

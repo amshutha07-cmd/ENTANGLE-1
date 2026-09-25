@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from PyQt6.QtCore import (
     QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtProperty, pyqtSignal,
 )
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen, QRegion
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QProgressBar,
     QBoxLayout, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
@@ -953,7 +953,17 @@ class ToastHost(QWidget):
     def eventFilter(self, obj, ev):
         if obj is self.parent() and ev.type() == ev.Type.Resize:
             self._fit()
+        elif isinstance(obj, _Toast) and ev.type() in (ev.Type.Resize, ev.Type.Move):
+            self._update_mask()                           # a notice took its final size, or moved up the stack
         return False
+
+    def _update_mask(self) -> None:
+        """Only the notices themselves take clicks; the gaps between them let clicks through to the page."""
+        area = QRegion()
+        for t in self._toasts():
+            area = area.united(QRegion(t.geometry()))
+        if not area.isEmpty():
+            self.setMask(area)
 
     def _toasts(self) -> list:
         return [self._lay.itemAt(i).widget() for i in range(self._lay.count()) if self._lay.itemAt(i).widget()]
@@ -966,6 +976,7 @@ class ToastHost(QWidget):
         self.adjustSize()
         p = self.parentWidget()
         self.move(p.width() - self.WIDTH - 20, p.height() - 38 - self.height() - 14)   # above the status bar
+        self._update_mask()
         self.show()
         self.raise_()
 
@@ -973,6 +984,7 @@ class ToastHost(QWidget):
                    on_click: Optional[Callable[[], None]] = None) -> None:
         t = _Toast(text, kind, self)
         t.on_click = on_click
+        t.installEventFilter(self)                        # keeps the click mask on the notices as they settle
         t.destroyed.connect(lambda *_: QTimer.singleShot(0, self._fit))
         self._lay.addWidget(t)
         t.show()
