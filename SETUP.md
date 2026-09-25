@@ -112,10 +112,14 @@ Why: the point of 12 shards is that no single place holds them all. Use **two or
    *(Advanced: the app stores this in `~/.ansx_vault/storage_targets.json` with owner-only permissions; you can also edit it by hand.)*
 5. **Add a second provider** (recommended). AWS S3:
    - S3 → Create bucket (region near you), keep **Block all public access = ON**.
-   - IAM → Users → Create user → attach an inline policy allowing only `s3:PutObject` and `s3:GetObject` on `arn:aws:s3:::YOUR-BUCKET/*` → Security credentials → Create access key.
+   - IAM → Users → Create user → attach an inline policy allowing only `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `arn:aws:s3:::YOUR-BUCKET/*` (delete lets the app clean up when you remove a file) → Security credentials → Create access key.
    - Add a second object to the JSON list: `{"name":"aws-eu","bucket":"YOUR-BUCKET","region":"eu-west-1","access_key":"...","secret_key":"..."}` (omit `endpoint_url`).
    Shard *i* goes to target *i mod number-of-targets*, so 2 targets = 6+5 shards each.
-6. **Try it**: **Protect** → drop a small file. The result should say *“11 pieces are in your cloud storage”*. Then look in the bucket dashboard: you should see objects named `<random>/s01.bin` … `s11.bin`.
+6. **Removing a file** from your vault can also delete its pieces from your cloud storage (the checkbox in the
+   Remove dialog). Your local copy is only removed once every piece is gone; if a key cannot delete, the file stays
+   listed and the app says which account refused. If someone has not picked the file up yet, the box starts unticked,
+   because they need those pieces to open it.
+7. **Try it**: **Protect** → drop a small file. The result should say *“11 pieces are in your cloud storage”*. Then look in the bucket dashboard: you should see objects named `<random>/s01.bin` … `s11.bin`.
    - `0 in cloud… no cloud storage configured` → the JSON file is missing/unreadable (check path and that it's valid JSON).
    - `uploads FAILED: AccessDenied` → wrong keys or the token isn't scoped to that bucket.
    - `SignatureDoesNotMatch` → wrong secret key or wrong `endpoint_url`/region.

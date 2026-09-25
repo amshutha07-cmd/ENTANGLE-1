@@ -5,7 +5,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
 )
 
 import cloud_dispatcher
@@ -40,6 +40,56 @@ def confirm(parent, title: str, text: str, ok: str = "Confirm", danger: bool = F
     row.addWidget(yes)
     lay.addLayout(row)
     return dlg.exec() == QDialog.DialogCode.Accepted
+
+
+def confirm_remove(parent, name: str, cloud_pieces: int, waiting: list) -> Optional[bool]:
+    """
+    Removing a protected file. Returns None (cancelled), True (also delete its pieces from cloud storage) or False
+    (only from this computer). If someone has not picked the file up yet, deleting its cloud pieces would stop them
+    from ever opening it, so that option starts unticked and the dialog says who is still waiting.
+    """
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Remove from your vault?")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(460)
+    lay = QVBoxLayout(dlg)
+    lay.setContentsMargins(24, 24, 24, 20)
+    lay.setSpacing(14)
+    head = QHBoxLayout()
+    head.setSpacing(14)
+    head.addWidget(IconBadge("trash", "danger", 44), 0, Qt.AlignmentFlag.AlignTop)
+    col = QVBoxLayout()
+    col.addWidget(label(f"Remove “{name}”?", "h2"))
+    if cloud_pieces:
+        col.addWidget(label(f"Its package is deleted from this computer. {cloud_pieces} of its 12 pieces are in your "
+                            "cloud storage.", "body"))
+    else:
+        col.addWidget(label("Its package, which holds all of its pieces, is deleted from this computer. "
+                            "Nothing of it is left in cloud storage.", "body"))
+    head.addLayout(col, 1)
+    lay.addLayout(head)
+    box = None
+    if cloud_pieces:
+        box = QCheckBox("Also delete its pieces from my cloud storage (this can't be undone)")
+        box.setChecked(not waiting)
+        lay.addWidget(box)
+        if waiting:
+            who = ", ".join(waiting)
+            lay.addWidget(Banner(f"{who} {'has' if len(waiting) == 1 else 'have'} not picked it up yet. Deleting the "
+                                 f"cloud pieces would mean they can never open it.", "warning"))
+    row = QHBoxLayout()
+    row.addStretch()
+    no = Button("Cancel", "secondary")
+    yes = Button("Remove", "danger", "trash")
+    no.clicked.connect(dlg.reject)
+    yes.clicked.connect(dlg.accept)
+    no.setDefault(True)
+    row.addWidget(no)
+    row.addWidget(yes)
+    lay.addLayout(row)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return bool(box is not None and box.isChecked())
 
 
 def info(parent, title: str, text: str, kind: str = "info") -> None:
@@ -195,8 +245,8 @@ HELP = {
            "“Object Read & Write” for this bucket only. The Account ID is on the R2 overview page."),
     "b2": ("In Backblaze open B2 → Buckets → your bucket (keep it Private). Create an Application Key for "
            "that bucket with Read and Write. The region is inside the bucket's endpoint, e.g. s3.us-west-004… → us-west-004."),
-    "s3": ("Create a private bucket and an IAM user allowed only s3:PutObject and s3:GetObject on it, "
-           "then create an access key for that user."),
+    "s3": ("Create a private bucket and an IAM user allowed only s3:PutObject, s3:GetObject and s3:DeleteObject "
+           "on it (delete lets “Remove” clean up a file's pieces), then create an access key for that user."),
     "custom": "Enter the S3 endpoint your provider gives you, plus the bucket name and an access key with read and write access.",
 }
 

@@ -95,7 +95,7 @@ If you do enable the contracts, redeploy them (`python3 deploy_contracts.py`, ne
   "access_key": "…", "secret_key": "…"}]
 ```
 
-Shard *i* goes to target *i mod len(targets)*. Use least-privilege keys (PutObject/GetObject on one prefix).
+Shard *i* goes to target *i mod len(targets)*. Use least-privilege keys (PutObject/GetObject/DeleteObject on one bucket or prefix; delete is only used when you remove a file and choose to delete its pieces).
 
 ## Run the whole system
 

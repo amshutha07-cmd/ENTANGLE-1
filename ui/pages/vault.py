@@ -9,7 +9,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from ui.controller import Job
-from ui.dialogs import confirm
+from ui.dialogs import confirm_remove
 from ui.pages.base import Page
 from ui import motion, theme
 from ui.widgets import (
@@ -294,8 +294,36 @@ class VaultPage(Page):
         entry = VaultLedger.get(entry_id)
         if not entry:
             return
-        if confirm(self, "Remove from your vault?",
-                   f"“{entry['original_filename']}” will no longer be listed and its protected package is deleted from this "
-                   "computer. Pieces in your cloud storage are not deleted; remove them in your provider's dashboard if you want.",
-                   ok="Remove", danger=True):
+        cloud_n = int((entry.get("storage") or {}).get("cloud", 0) or 0)
+        also_cloud = confirm_remove(self, entry["original_filename"], cloud_n,
+                                    self.ctl.pending_sends(entry) if cloud_n else [])
+        if also_cloud is None:
+            return
+        if not also_cloud:
             self.ctl.delete_entry(entry_id)
+            return
+        if self._job is not None:
+            self.ctl.toast.emit("Wait for the current file to finish, then remove this one.", "warning")
+            return
+        self.result.hide()
+        self.drop.setEnabled(False)
+        self.progress.start(f"Removing {entry['original_filename']}")
+        job = self.ctl.make_remove_job(entry)
+        self._job = job
+        self.ctl.run_job(job, on_success=lambda r, e=entry: self._removed(e, r), on_fail=self._remove_failed,
+                         on_cancel=self._cancelled, on_progress=lambda text, pct: self.progress.update_progress(text, pct))
+
+    def _removed(self, entry: dict, result: dict) -> None:
+        """Every cloud piece is gone: now the local package can go too (it was the only map of where they were)."""
+        self._done()
+        self.ctl.delete_entry(entry["id"], cloud_deleted=result["deleted"])
+        self.result._btn.hide()
+        self.result.set(f"Removed “{entry['original_filename']}” and deleted its {result['deleted']} pieces from your "
+                        "cloud storage.", "success")
+        motion.reveal(self.result)
+
+    def _remove_failed(self, message: str) -> None:
+        self._done()
+        self.result._btn.hide()
+        self.result.set(message, "danger")
+        motion.reveal(self.result)

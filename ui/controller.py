@@ -144,10 +144,11 @@ class AppController(QObject):
         job.start()
         return job
 
-    WORK_JOBS = ("protect", "send", "accept", "restore", "open-package")
-    WORK_PAGES = {"protect": "vault", "restore": "vault", "send": "send", "accept": "inbox", "open-package": "inbox"}
+    WORK_JOBS = ("protect", "send", "accept", "restore", "open-package", "remove")
+    WORK_PAGES = {"protect": "vault", "restore": "vault", "send": "send", "accept": "inbox", "open-package": "inbox",
+                  "remove": "vault"}
     WORK_START = {"protect": "Protecting…", "restore": "Restoring…", "send": "Sending…", "accept": "Receiving…",
-                  "open-package": "Opening a package…"}
+                  "open-package": "Opening a package…", "remove": "Deleting from cloud storage…"}
 
     def busy(self) -> bool:
         """Is work someone would lose still running (protecting, sending, receiving, restoring)? Background lookups
@@ -411,11 +412,45 @@ class AppController(QObject):
         self.vault_changed.emit()
         self.activity_changed.emit()
 
-    def delete_entry(self, entry_id: str) -> bool:
+    def pending_sends(self, entry: dict) -> list[str]:
+        """People this file was sent to who have not picked it up yet (their download needs its cloud pieces)."""
+        import json
+        try:
+            with open(self._sent_names_path()) as f:
+                names = json.load(f)
+        except (OSError, ValueError):
+            names = {}
+        waiting = []
+        for o in self.outbox or []:
+            rec = names.get(o.get("id"), {}) if isinstance(names, dict) else {}
+            same = rec.get("entry") == entry.get("id") if rec.get("entry") else rec.get("file") == entry.get("original_filename")
+            if same and o.get("state") in ("uploading", "ready") and o.get("to") not in waiting:
+                waiting.append(o["to"])
+        return waiting
+
+    def make_remove_job(self, entry: dict) -> Job:
+        """Delete a file's pieces from cloud storage. Fails (keeping the file) unless every piece is gone."""
+        private_pem = self.identity().get("private_key", "")
+
+        def work(progress: ProgressFn, cancelled: Callable[[], bool]) -> dict:
+            progress("Finding where its pieces are…", 15)
+            result = vault_service.delete_cloud_pieces(entry, private_pem)
+            progress("Deleting its pieces from your cloud storage…", 80)
+            if result["problems"]:
+                left = result["total"] - result["deleted"]
+                raise vault_service.VaultError(
+                    f"{left} of {result['total']} pieces could not be deleted: {'; '.join(result['problems'][:2])}. "
+                    "The file stays in your vault, so you can fix that and try again.")
+            return result
+        return Job(work, "remove")
+
+    def delete_entry(self, entry_id: str, cloud_deleted: int = 0) -> bool:
         entry = VaultLedger.get(entry_id)
         ok = VaultLedger.remove_entry(entry_id)
         if ok and entry:
-            activity.add("security", f"Removed {entry['original_filename']} from your vault", operator=self.operator or "")
+            where = (f" and deleted its {cloud_deleted} pieces from cloud storage" if cloud_deleted else "")
+            activity.add("security", f"Removed {entry['original_filename']} from your vault{where}",
+                         operator=self.operator or "")
             self.vault_changed.emit()
             self.activity_changed.emit()
         return ok
@@ -535,7 +570,7 @@ class AppController(QObject):
             self._send_resume.pop(key, None)
             _silent_remove(out_path)                       # the sender cannot open it anyway; leave no copy
             try:
-                self.remember_sent(tid, entry.get("original_filename", ""))   # so "Sent" can name the file
+                self.remember_sent(tid, entry.get("original_filename", ""), entry.get("id", ""))   # "Sent" names it
             except OSError:
                 pass
             return {"id": tid, "to": recipient}
@@ -555,7 +590,7 @@ class AppController(QObject):
         except (OSError, ValueError, AttributeError):
             return ""
 
-    def remember_sent(self, transfer_id: str, file_name: str) -> None:
+    def remember_sent(self, transfer_id: str, file_name: str, entry_id: str = "") -> None:
         import json
         from security_core import _atomic_write_json
         try:
@@ -565,7 +600,7 @@ class AppController(QObject):
                 names = {}
         except (OSError, ValueError):
             names = {}
-        names[transfer_id] = {"file": file_name, "owner": self.operator or ""}
+        names[transfer_id] = {"file": file_name, "owner": self.operator or "", "entry": entry_id}
         if len(names) > 500:
             names = dict(list(names.items())[-500:])
         os.makedirs(paths.vault_home(), mode=0o700, exist_ok=True)

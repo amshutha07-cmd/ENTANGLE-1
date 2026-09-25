@@ -464,3 +464,77 @@ def test_home_tiles_show_live_status(signed_in):
     assert "protected" in hp.card_protect.text.text()
     assert hp.card_send.text.text().startswith("Last: one.pdf to sam")
     assert hp.card_inbox.text.text() == "1 file waiting for you to accept."
+
+
+def _entry_with_cloud(n=7):
+    return VaultLedger.add_entry("board.pdf", "/nowhere/board.png", "2026-09-25 09:00:00", size=10,
+                                 storage={"cloud": n, "inline": 12 - n}, owner="ux_user")
+
+
+def test_removing_everywhere_deletes_the_cloud_pieces_first(signed_in, monkeypatch):
+    import vault_service
+    import ui.pages.vault as vpage
+    ctl, win = signed_in
+    e = _entry_with_cloud()
+    monkeypatch.setattr(vpage, "confirm_remove", lambda *a: True)                     # "also delete from cloud"
+    monkeypatch.setattr(vault_service, "delete_cloud_pieces", lambda entry, pem, dispatcher=None:
+                        {"total": 7, "deleted": 7, "problems": []})
+    vp = win.pages["vault"]
+    win.go("vault")
+    vp._remove(e["id"])
+    assert _wait(lambda: vp._job is None)
+    assert VaultLedger.get(e["id"]) is None and "deleted its 7 pieces" in vp.result._text.text()
+
+
+def test_if_any_piece_stays_the_file_stays_too(signed_in, monkeypatch):
+    import vault_service
+    import ui.pages.vault as vpage
+    ctl, win = signed_in
+    e = _entry_with_cloud()
+    monkeypatch.setattr(vpage, "confirm_remove", lambda *a: True)
+    monkeypatch.setattr(vault_service, "delete_cloud_pieces", lambda entry, pem, dispatcher=None:
+                        {"total": 7, "deleted": 5, "problems": ["“backup-b2” refused (AccessDenied)"]})
+    vp = win.pages["vault"]
+    vp._remove(e["id"])
+    assert _wait(lambda: vp._job is None)
+    assert VaultLedger.get(e["id"]) is not None                                        # still listed: nothing is lost
+    msg = vp.result._text.text()
+    assert "2 of 7 pieces could not be deleted" in msg and "stays in your vault" in msg
+
+
+def test_remove_from_this_computer_only_leaves_the_cloud_alone(signed_in, monkeypatch):
+    import vault_service
+    import ui.pages.vault as vpage
+    ctl, win = signed_in
+    e = _entry_with_cloud()
+    called = []
+    monkeypatch.setattr(vpage, "confirm_remove", lambda *a: False)
+    monkeypatch.setattr(vault_service, "delete_cloud_pieces", lambda *a, **k: called.append(1))
+    win.pages["vault"]._remove(e["id"])
+    assert VaultLedger.get(e["id"]) is None and not called
+
+
+def test_someone_still_waiting_is_noticed(signed_in):
+    ctl, win = signed_in
+    e = _entry_with_cloud()
+    ctl.remember_sent("w1", "board.pdf", e["id"])
+    ctl.outbox = [{"id": "w1", "to": "sam", "size": 1, "created": int(time.time()), "state": "ready"}]
+    assert ctl.pending_sends(e) == ["sam"]
+    ctl.outbox[0]["state"] = "delivered"
+    assert ctl.pending_sends(e) == []                                                  # picked up: their copy is safe
+
+
+def test_remove_dialog_defaults(monkeypatch):
+    from PyQt6.QtWidgets import QCheckBox, QDialog
+    from ui.dialogs import confirm_remove
+    seen = []
+
+    def fake_exec(self):
+        seen.append(self)
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    assert confirm_remove(None, "a.pdf", 7, []) is True                               # nobody waiting: ticked
+    assert seen[-1].findChildren(QCheckBox)[0].isChecked()
+    assert confirm_remove(None, "a.pdf", 7, ["sam"]) is False                          # sam waiting: unticked
+    assert "sam has not picked it up" in " ".join(l.text() for l in seen[-1].findChildren(__import__("PyQt6.QtWidgets", fromlist=["QLabel"]).QLabel))
+    assert confirm_remove(None, "a.pdf", 0, []) is False and not seen[-1].findChildren(QCheckBox)   # nothing in cloud

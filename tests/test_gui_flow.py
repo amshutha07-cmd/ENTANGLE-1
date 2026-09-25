@@ -66,6 +66,9 @@ def auto_confirm(monkeypatch):
 
     for mod in (ui.dialogs, a, c, i, s, st, v):
         monkeypatch.setattr(mod, "confirm", fake, raising=False)
+        monkeypatch.setattr(mod, "confirm_remove",
+                            lambda parent, name, n, waiting: (state["asked"].append("remove " + name) or False)
+                            if state["answer"] else None, raising=False)
         monkeypatch.setattr(mod, "verify_fingerprint",
                             lambda parent, name, fp: state["asked"].append("verify " + name) or state["answer"],
                             raising=False)

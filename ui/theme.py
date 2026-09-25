@@ -79,9 +79,25 @@ def mono_family() -> str:
     return pick_font(MONO_STACK)
 
 
+def _check_mark() -> str:
+    """A white check mark image for ticked checkboxes (stylesheets can only draw it from a file)."""
+    import os
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), f"ansx_ui_{os.getuid() if hasattr(os, 'getuid') else 'u'}", "check.png")
+    if not os.path.exists(path):
+        try:
+            from ui import icons
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            icons.pixmap("check", "#FFFFFF", 14, 3.0).save(path, "PNG")
+        except Exception:
+            return ""
+    return path.replace("\\", "/")
+
+
 def stylesheet() -> str:
     t = _state["tokens"]
     mono = mono_family()
+    check = _check_mark()
     return f"""
 * {{ outline: none; }}
 QWidget {{ color: {t['text']}; background: transparent; }}
@@ -134,6 +150,12 @@ QPushButton[variant="primary"]:focus, QPushButton[variant="danger"]:focus {{ bor
 QPushButton[variant="ghost"]:focus {{ border-color: {t['primary']}; color: {t['text']}; }}
 QPushButton[nav="true"]:focus {{ border: 1px solid {t['primary']}; padding: 10px 13px; }}
 QFrame#Card[clickable="true"]:focus {{ border: 1px solid {t['primary']}; }}
+QCheckBox {{ spacing: 10px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {t['border_strong']};
+                       background: {t['surface_alt']}; }}
+QCheckBox::indicator:hover {{ border-color: {t['primary']}; }}
+QCheckBox::indicator:checked {{ background: {t['primary_fill']}; border-color: {t['primary_fill']}; image: url("{check}"); }}
+QCheckBox:focus {{ color: {t['text']}; }}
 
 /* ── inputs ── */
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {{
