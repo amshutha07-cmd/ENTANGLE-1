@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 160" width="200" height="160">
+  <!-- No cloud storage yet: a happy cloud waiting for pieces. Every top-level group is a layer the app animates by id. -->
+  <defs><linearGradient id="cloudBody" x1="100" y1="36" x2="100" y2="98" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#DCE5FF"/></linearGradient></defs>
+  <g id="blob"><circle cx="100" cy="84" r="64" fill="{{blob}}"/></g>
+  <g id="cloud"><path d="M58 86 C50 86 44 80 44 72 C44 63 51 57 60 58 C62 46 72 38 84 38 C94 38 102 44 106 52 C110 48 116 46 122 46 C136 46 146 57 146 70 C152 72 156 77 156 84 C156 92 150 98 142 98 H62 C56 98 52 94 52 90 Z" fill="url(#cloudBody)" stroke="#B9C8FF" stroke-width="1.6" stroke-linejoin="round"/><ellipse cx="72" cy="56" rx="7" ry="4" fill="#FFFFFF" fill-opacity="0.9" transform="rotate(-18 72 56)"/></g>
+  <g id="face"><ellipse cx="82" cy="80" rx="6.5" ry="4" fill="#FF9DB5" fill-opacity="0.8"/><ellipse cx="124" cy="80" rx="6.5" ry="4" fill="#FF9DB5" fill-opacity="0.8"/><path d="M97 80 Q103 85.5 109 80" fill="none" stroke="#2A2E48" stroke-width="2.8" stroke-linecap="round"/></g>
+  <g id="eyes"><ellipse cx="92" cy="70" rx="4.2" ry="5.4" fill="#2A2E48"/><ellipse cx="114" cy="70" rx="4.2" ry="5.4" fill="#2A2E48"/><circle cx="93.6" cy="67.6" r="1.5" fill="#FFFFFF"/><circle cx="115.6" cy="67.6" r="1.5" fill="#FFFFFF"/></g>
+  <g id="p1"><rect x="66" y="124" width="12" height="12" rx="3.5" fill="#8EA6FF"/><rect x="68.5" y="126.5" width="4" height="2.2" rx="1.1" fill="#FFFFFF" fill-opacity="0.7"/></g>
+  <g id="p2"><rect x="94" y="130" width="12" height="12" rx="3.5" fill="#FFD66B"/><rect x="96.5" y="132.5" width="4" height="2.2" rx="1.1" fill="#FFFFFF" fill-opacity="0.7"/></g>
+  <g id="p3"><rect x="122" y="124" width="12" height="12" rx="3.5" fill="#8CE0C4"/><rect x="124.5" y="126.5" width="4" height="2.2" rx="1.1" fill="#FFFFFF" fill-opacity="0.7"/></g>
+  <g id="spark1"><path d="M160 36 C161.08 40.596 161.404 40.92 166 42 C161.404 43.08 161.08 43.404 160 48 C158.92 43.404 158.596 43.08 154 42 C158.596 40.92 158.92 40.596 160 36 Z" fill="#FF9DB5"/></g>
+</svg>

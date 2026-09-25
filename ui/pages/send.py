@@ -13,9 +13,9 @@ from security_core import VaultLedger
 from ui.controller import Job
 from ui.dialogs import verify_fingerprint
 from ui.pages.base import Page
-from ui import motion
+from ui import art, motion
 from ui.widgets import (
-    Avatar, Banner, Button, Card, EmptyState, Fingerprint, IconBadge, KeyValue, ListRow, Pill,
+    Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill,
     FitStack, ProgressPanel, Stepper, escape_goes_back, file_icon, friendly_date, human_size, label, on_enter,
 )
 
@@ -174,7 +174,7 @@ class SendPage(Page):
         dl = QVBoxLayout(self.done)
         dl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         dl.setSpacing(10)
-        dl.addWidget(IconBadge("check", "success", 64), 0, Qt.AlignmentFlag.AlignHCenter)
+        dl.addWidget(art.Illustration("plane", 140), 0, Qt.AlignmentFlag.AlignHCenter)   # off it goes
         self.done_title = label("Sent", "h1", wrap=False)
         self.done_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.done_text = label("", "muted")

@@ -549,15 +549,21 @@ class Banner(QFrame):
         polish(self)
 
 
+# Empty states show a small animated illustration (ui/art/) chosen from their icon, instead of a plain icon.
+ART_FOR_ICON = {"inbox": "inbox", "send": "plane", "shield": "shield", "users": "friends", "cloud": "cloud",
+                "search": "search"}
+
+
 class EmptyState(QWidget):
     def __init__(self, icon: str, title: str, text: str, action: str = "", on_action: Optional[Callable] = None, parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 28, 24, 28)
+        lay = self._lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 28)
         lay.setSpacing(10)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumHeight(230)              # wrapped text needs room, or Qt clips the last line
-        self.badge = IconBadge(icon, "neutral", 56)
+        from ui import art
+        self.badge = art.make(ART_FOR_ICON.get(icon), 118) or IconBadge(icon, "neutral", 56)
         lay.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignHCenter)
         t = self._title = label(title, "h2", wrap=False)
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -577,6 +583,18 @@ class EmptyState(QWidget):
     def set_text(self, title: str, text: str) -> None:
         self._title.setText(title)
         self._text.setText(text)
+
+    def set_art(self, scene: str) -> None:
+        """Switch the illustration (e.g. "search" when a filter matches nothing)."""
+        from ui import art
+        if getattr(self.badge, "scene", None) == scene:
+            return
+        new = art.make(scene, 118)
+        if new is None:
+            return
+        self._lay.replaceWidget(self.badge, new)
+        self.badge.deleteLater()
+        self.badge = new
 
 
 class SectionHeader(QWidget):

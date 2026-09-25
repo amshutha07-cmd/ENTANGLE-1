@@ -570,6 +570,9 @@ class MainWindow(QMainWindow):
             w.refresh_icon()
         for w in self.findChildren(Banner):
             w.refresh()
+        from ui.art import Illustration
+        for w in self.findChildren(Illustration):         # background circle and shadow follow the theme
+            w.retheme()
         if self._tray:
             self._tray.setIcon(QIcon(icons.pixmap("shield", theme.color("primary"), 32)))
         page = self.content.currentWidget()

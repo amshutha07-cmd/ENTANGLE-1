@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from security_core import SecurityCore
-from ui import motion, theme
+from ui import art, motion, theme
 from ui.controller import AppController, Job
 from ui.dialogs import confirm
 from ui.widgets import (
@@ -62,7 +62,7 @@ def brand_header() -> QWidget:
     lay = QVBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 6)
     lay.setSpacing(8)
-    lay.addWidget(IconBadge("shield", "primary", 56), 0, Qt.AlignmentFlag.AlignHCenter)
+    lay.addWidget(art.Illustration("shield", 104), 0, Qt.AlignmentFlag.AlignHCenter)   # the mascot says hello
     t = label("A.N.Sx Vault", "display", wrap=False)
     t.setAlignment(Qt.AlignmentFlag.AlignCenter)
     s = label("Send files that only the right person can open.", "muted", wrap=False)

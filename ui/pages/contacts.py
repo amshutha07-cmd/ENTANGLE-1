@@ -131,6 +131,7 @@ class ContactsPage(Page):
         everyone = self.ctl.contacts()
         contacts = [c for c in everyone if needle in c["operator"].lower()]
         self.search.setVisible(bool(everyone))
+        self.empty.set_art("search" if everyone else "friends")
         if everyone:
             self.empty.set_text("No match", f"Nobody called “{self.search.text().strip()}”. Check the spelling, or press "
                                             "“Refresh from relay”.")
