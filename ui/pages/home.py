@@ -10,7 +10,8 @@ import platform_secret
 from ui import icons, motion, theme
 from ui.pages.base import Page
 from ui.widgets import (
-    Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, ProgressRing, Sparkline, clear_layout, label, time_ago,
+    AvatarStack, Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, ProgressRing, Sparkline, clear_layout, label,
+    time_ago,
 )
 
 ACTIVITY_STYLE = {
@@ -47,6 +48,9 @@ class ActionCard(ClickableCard):
         self.badge = IconBadge(icon, "primary", 44)
         row.addWidget(self.badge)
         row.addStretch()
+        self.people = AvatarStack(24)                     # who it is about (the inbox: who is waiting)
+        self.people.hide()
+        row.addWidget(self.people, 0, Qt.AlignmentFlag.AlignVCenter)
         self.pill = Pill("", "primary")
         self.pill.hide()
         row.addWidget(self.pill)
@@ -334,6 +338,7 @@ class HomePage(Page):
             self.card_send.text.setText(self.card_send.default_text)
         self._fill_again()
         senders = sorted({i.get("from", "") for i in ctl.inbox or []} - {""})
+        self.card_inbox.people.set_names(senders)
         self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} from {_names(senders)}, waiting for "
                                      "you to accept." if waiting and senders else
                                      f"{waiting} file{'s' if waiting != 1 else ''} waiting for you to accept."

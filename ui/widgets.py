@@ -641,6 +641,38 @@ class Avatar(QWidget):
             p.drawEllipse(dot.adjusted(1, 1, -1, -1))
 
 
+class AvatarStack(QWidget):
+    """Up to three overlapping initials badges (who is waiting, who is involved), with "+N" for the rest."""
+
+    def __init__(self, size: int = 24, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self._badges: list = []
+        self.setFixedHeight(size)
+
+    def set_names(self, names: list) -> None:
+        for b in self._badges:
+            b.deleteLater()
+        self._badges = []
+        shown, step = names[:3], int(self._size * 0.66)
+        for i, name in enumerate(shown):
+            b = Avatar(name, self._size, self)
+            b.move(i * step, 0)
+            b.setToolTip(name)
+            b.show()
+            self._badges.append(b)
+        extra = len(names) - len(shown)
+        if extra > 0:
+            more = label(f"+{extra}", "faint", wrap=False)
+            more.setParent(self)
+            more.move(len(shown) * step + self._size - step + 6, (self._size - 16) // 2)
+            more.show()
+            self._badges.append(more)
+        width = (len(shown) - 1) * step + self._size + (34 if extra > 0 else 0) if shown else 0
+        self.setFixedWidth(max(0, width))
+        self.setVisible(bool(shown))
+
+
 class ClickablePill(Pill):
     """A status pill that opens the place where that status can be changed."""
     clicked = pyqtSignal()
@@ -761,6 +793,20 @@ class Banner(QFrame):
         self.set(text, kind)
 
     NARROW = 520
+
+    def add_action(self, text: str, icon: str, on_action: Callable) -> "Button":
+        """A second button beside the first (e.g. "Try again" next to "Connection settings"); they stay together."""
+        b = Button(text, "secondary", icon, "sm")
+        b.clicked.connect(on_action)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(b)
+        if self._btn is not None:
+            self._inner.removeWidget(self._btn)
+            row.addWidget(self._btn)
+        row.addStretch(1)
+        self._inner.addLayout(row)
+        return b
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)

@@ -570,7 +570,7 @@ class AppController(QObject):
             self._send_resume.pop(key, None)
             _silent_remove(out_path)                       # the sender cannot open it anyway; leave no copy
             try:
-                self.remember_sent(tid, entry.get("original_filename", ""), entry.get("id", ""))   # "Sent" names it
+                self.remember_sent(tid, entry.get("original_filename", ""), entry.get("id", ""), recipient)
             except OSError:
                 pass
             return {"id": tid, "to": recipient}
@@ -590,7 +590,7 @@ class AppController(QObject):
         except (OSError, ValueError, AttributeError):
             return ""
 
-    def remember_sent(self, transfer_id: str, file_name: str, entry_id: str = "") -> None:
+    def remember_sent(self, transfer_id: str, file_name: str, entry_id: str = "", to: str = "") -> None:
         import json
         from security_core import _atomic_write_json
         try:
@@ -600,15 +600,33 @@ class AppController(QObject):
                 names = {}
         except (OSError, ValueError):
             names = {}
-        names[transfer_id] = {"file": file_name, "owner": self.operator or "", "entry": entry_id}
+        old = names.get(transfer_id) if isinstance(names.get(transfer_id), dict) else {}
+        names[transfer_id] = {"file": file_name, "owner": self.operator or "",      # never lose what is already known
+                              "entry": entry_id or old.get("entry", ""), "to": to or old.get("to", "")}
         if len(names) > 500:
             names = dict(list(names.items())[-500:])
         os.makedirs(paths.vault_home(), mode=0o700, exist_ok=True)
         _atomic_write_json(self._sent_names_path(), names)
 
+    def shared_with(self) -> dict:
+        """{protected file id: [people it was sent to]} for my files, from what this computer remembers."""
+        import json
+        try:
+            with open(self._sent_names_path()) as f:
+                records = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        out: dict = {}
+        for r in records.values() if isinstance(records, dict) else []:
+            if isinstance(r, dict) and r.get("entry") and r.get("to") and r.get("owner") in ("", self.operator):
+                out.setdefault(r["entry"], [])
+                if r["to"] not in out[r["entry"]]:
+                    out[r["entry"]].append(r["to"])
+        return out
+
     def after_send(self, entry: dict, recipient: str, transfer_id: str = "") -> None:
         if transfer_id:
-            self.remember_sent(transfer_id, entry.get("original_filename", ""))
+            self.remember_sent(transfer_id, entry.get("original_filename", ""), entry.get("id", ""), recipient)
         activity.add("sent", f"Sent {entry['original_filename']} to {recipient}", operator=self.operator or "")
         self.activity_changed.emit()
 

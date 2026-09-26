@@ -50,6 +50,7 @@ class Page(QScrollArea):
         self._conn_texts = texts
         self.conn_banner = Banner("", "warning", "Connection settings", (lambda: nav.emit("settings")) if nav else None)
         self.conn_banner.hide()
+        self.conn_retry = self.conn_banner.add_action("Try again", "refresh", self.ctl.restart_relay)   # don't wait
         self.root.insertWidget(1, self.conn_banner)
         # Bound method, not a lambda: Qt disconnects it when this page is destroyed. The controller outlives pages,
         # and a lambda would keep calling into a deleted page (a crash, not just an error).
@@ -63,6 +64,7 @@ class Page(QScrollArea):
         text = self._conn_texts.get(state, "")
         if text:
             self.conn_banner.set(text, "danger" if state == "conflict" else "warning")
+        self.conn_retry.setVisible(state == "offline")      # retrying cannot fix a name that is taken
         self.conn_banner.setVisible(bool(text))
 
     def notify_if_away(self, text: str, kind: str) -> None:

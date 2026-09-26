@@ -30,7 +30,7 @@ class VaultRow(QWidget):
     restore_clicked = pyqtSignal(str)
     remove_clicked = pyqtSignal(str)
 
-    def __init__(self, entry: dict):
+    def __init__(self, entry: dict, shared: Optional[list] = None):
         super().__init__()
         self.entry_id = entry["id"]
         self._package = entry.get("ghost_map_path", "")
@@ -48,7 +48,11 @@ class VaultRow(QWidget):
         cloud, inline = st.get("cloud", 0), st.get("inline", 0)
         where = (f"{cloud} of {cloud + inline} pieces in cloud storage" if cloud
                  else "all pieces inside the package" if st else "")
-        sub = " · ".join(x for x in (human_size(entry.get("size")), friendly_date(entry["date_vaulted"]), where) if x and x != "—")
+        people = shared or []                             # who it went to, when this computer remembers
+        sent = ("sent to " + (" and ".join(people) if len(people) <= 2 else f"{people[0]}, {people[1]} and "
+                                                                           f"{len(people) - 2} more")) if people else ""
+        sub = " · ".join(x for x in (human_size(entry.get("size")), friendly_date(entry["date_vaulted"]), where, sent)
+                         if x and x != "—")
         col.addWidget(name)
         col.addWidget(ElidedLabel(sub, "muted"))
         lay.addLayout(col, 1)
@@ -305,8 +309,9 @@ class VaultPage(Page):
             lay.addWidget(EmptyState("search", "No match", f"None of your files is called “{needle}”."))
             return
         flash, self._flash_id = self._flash_id, None
+        shared = self.ctl.shared_with()                  # read once for the whole list
         for e in entries:
-            row = VaultRow(e)
+            row = VaultRow(e, shared.get(e["id"]))
             row.send_clicked.connect(self.send_requested)
             row.restore_clicked.connect(self._restore)
             row.remove_clicked.connect(self._remove)

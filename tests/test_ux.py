@@ -1194,3 +1194,27 @@ def test_storage_accounts_show_which_company_holds_them():
     assert _provider({"endpoint_url": "https://s3.us-west-002.backblazeb2.com"})[0] == "Backblaze B2"
     assert _provider({"endpoint_url": ""})[0] == "Amazon S3"
     assert _provider({"endpoint_url": "https://minio.example.com"})[0] == "S3-compatible"
+
+
+def test_protected_files_say_who_they_were_sent_to(signed_in):
+    ctl, win = signed_in
+    e = VaultLedger.add_entry("shared-deck.pdf", "/x/s.png", "2026-09-25 09:00:00", size=10, storage={}, owner="ux_user")
+    ctl.remember_sent("sh1", "shared-deck.pdf", e["id"], "sam")
+    ctl.after_send(e, "alex", "sh2")                                 # the everyday path records both too
+    assert sorted(ctl.shared_with()[e["id"]]) == ["alex", "sam"]
+    ctl.remember_sent("sh1", "shared-deck.pdf")                      # a later write without them keeps them
+    assert "sam" in ctl.shared_with()[e["id"]]
+
+
+def test_offline_you_can_try_again_right_away(signed_in, monkeypatch):
+    ctl, win = signed_in
+    tried = []
+    monkeypatch.setattr(ctl, "_start_relay", lambda name, identity: tried.append(name))   # what "Try again" restarts
+    page = win.pages["inbox"]
+    win.go("inbox")
+    page._show_connection("offline")
+    assert page.conn_banner.isVisible() and page.conn_retry.isVisible()
+    page.conn_retry.click()
+    assert tried
+    page._show_connection("conflict")
+    assert not page.conn_retry.isVisible()                          # retrying cannot fix a taken name
