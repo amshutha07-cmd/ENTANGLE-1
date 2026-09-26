@@ -4,7 +4,9 @@ from __future__ import annotations
 from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QApplication, QFileDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMenu, QVBoxLayout,
+)
 
 from ui.dialogs import confirm, info, verify_fingerprint
 from ui.pages.base import Page
@@ -71,6 +73,10 @@ class ContactsPage(Page):
         self.list = QListWidget()
         self.list.setMinimumHeight(260)
         self.list.itemSelectionChanged.connect(self._picked)
+        self.list.itemDoubleClicked.connect(lambda _i: self._selected and self.send_to_requested.emit(self._selected))
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)     # right-click: what you can do
+        self.list.customContextMenuRequested.connect(self._person_menu)
+        self.list.setToolTip("Double-click to send them a file. Right-click for more.")
         left.body.addWidget(self.list)
         self.empty = EmptyState("users", "No one yet", "Press “Refresh from relay” to find people, or import an ID file someone sent you.")
         left.body.addWidget(self.empty)
@@ -139,6 +145,7 @@ class ContactsPage(Page):
         needle = self.search.text().strip().lower()
         everyone = self.ctl.contacts()
         contacts = [c for c in everyone if needle in c["operator"].lower()]
+        contacts.sort(key=lambda c: (self.ctl.trust(c["operator"]) != "verified", c["operator"].lower()))  # trusted first
         self.list_title.setText(f"PEOPLE YOU CAN SEND TO · {len(everyone)}" if everyone else "PEOPLE YOU CAN SEND TO")
         self.search.setVisible(bool(everyone))
         self.empty.set_art("search" if everyone else "friends")
@@ -199,6 +206,22 @@ class ContactsPage(Page):
         self.verify_btn.setVisible(trust != "verified")
 
     # ── actions ──────────────────────────────────────────────────────────────
+    def _person_menu(self, pos) -> None:
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        self.select(item.data(Qt.ItemDataRole.UserRole))
+        name = self._selected
+        menu = QMenu(self)
+        menu.addAction(f"Send {name} a file…", lambda: self.send_to_requested.emit(name))
+        menu.addAction("Copy their fingerprint", lambda: QApplication.clipboard().setText(self.d_fp.raw()))
+        if self.ctl.trust(name) != "verified":
+            menu.addAction("Compare their key…", self._verify)
+        menu.addSeparator()
+        menu.addAction("Remove this person…", self._remove)
+        menu.exec(self.list.viewport().mapToGlobal(pos))
+        menu.deleteLater()                                # one menu per right-click, not one kept forever
+
     def _verify(self) -> None:
         if self._selected and verify_fingerprint(self, self._selected, self.d_fp.raw()):
             self.ctl.verify_contact(self._selected)

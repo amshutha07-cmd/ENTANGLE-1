@@ -16,7 +16,7 @@ from ui.dialogs import confirm
 from ui.widgets import (
     add_reveal_toggle, escape_goes_back,
     FitStack,
-    Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish,
+    Banner, Button, Card, Fingerprint, IconBadge, ListRow, Pill, Stepper, label, polish, StrengthMeter,
 )
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$")
@@ -315,6 +315,10 @@ class CreateView(_Center):
         pb.addWidget(self.pw1)
         pb.addWidget(self.pw2)
         strength_row = QHBoxLayout()
+        strength_row.setSpacing(10)
+        self.pw_meter = StrengthMeter()                   # the same strength, as segments you can watch fill
+        self.pw_meter.hide()
+        strength_row.addWidget(self.pw_meter, 0, Qt.AlignmentFlag.AlignVCenter)
         strength_row.addWidget(self.pw_strength)
         strength_row.addStretch()
         pb.addLayout(strength_row)
@@ -417,11 +421,14 @@ class CreateView(_Center):
     def _pw_changed(self) -> None:
         p = self.pw1.text()
         if p:
-            text, kind, _ = passphrase_strength(p)
+            text, kind, score = passphrase_strength(p)
             self.pw_strength.set(f"Strength: {text}", kind)
             self.pw_strength.show()
+            self.pw_meter.show()
+            self.pw_meter.set_score(score, kind)
         else:
             self.pw_strength.hide()
+            self.pw_meter.hide()
         self.pw_msg.setText("Passphrases do not match." if self.pw2.text() and self.pw2.text() != p else "")
         self._update_next()
 

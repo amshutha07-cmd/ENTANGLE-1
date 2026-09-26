@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 from PyQt6.QtCore import QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
+from PyQt6.QtGui import QDesktopServices, QKeySequence
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QMenu, QVBoxLayout, QWidget
 
 from ui.controller import Job, pref, set_pref
 from ui.dialogs import confirm_remove
@@ -32,6 +33,7 @@ class VaultRow(QWidget):
     def __init__(self, entry: dict):
         super().__init__()
         self.entry_id = entry["id"]
+        self._package = entry.get("ghost_map_path", "")
         self.setObjectName("VaultRow")                    # highlighted under the pointer (theme.py)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         lay = QHBoxLayout(self)
@@ -60,6 +62,22 @@ class VaultRow(QWidget):
         remove.clicked.connect(lambda: self.remove_clicked.emit(self.entry_id))
         for b in (send, restore, remove):
             lay.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.setToolTip("Double-click to send it. Right-click for more.")
+
+    def mouseDoubleClickEvent(self, _e) -> None:
+        self.send_clicked.emit(self.entry_id)             # the thing you most often do with a protected file
+
+    def contextMenuEvent(self, e) -> None:
+        menu = QMenu(self)
+        menu.addAction("Send…", lambda: self.send_clicked.emit(self.entry_id))
+        menu.addAction("Restore a copy…", lambda: self.restore_clicked.emit(self.entry_id))
+        if self._package and os.path.exists(self._package):
+            menu.addAction("Show the package in " + ("Finder" if sys.platform == "darwin" else "its folder"),
+                           lambda: open_folder(self._package))
+        menu.addSeparator()
+        menu.addAction("Remove from my vault…", lambda: self.remove_clicked.emit(self.entry_id))
+        menu.exec(e.globalPos())
+        menu.deleteLater()                                # one menu per right-click, not one kept forever
 
 
 class VaultPage(Page):
@@ -280,7 +298,8 @@ class VaultPage(Page):
             entries.sort(key=lambda e: e.get("date_vaulted", ""), reverse=True)
         if not everything:
             lay.addWidget(EmptyState("shield", "No protected files yet",
-                                     "Drop a file above. You can then send it, or restore it any time."))
+                                     f"Drop a file above, or press {QKeySequence('Ctrl+O').toString(QKeySequence.SequenceFormat.NativeText)}. "
+                                     "You can then send it, or restore it any time."))
             return
         if not entries:
             lay.addWidget(EmptyState("search", "No match", f"None of your files is called “{needle}”."))

@@ -1296,6 +1296,52 @@ class Sparkline(QWidget):
         p.end()
 
 
+class StrengthMeter(QWidget):
+    """Four segments that fill as a passphrase gets stronger (red, amber, violet, mint), gliding as you type."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(132, 8)
+        self._level, self._kind = 0.0, "danger"
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(motion.FAST)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._glide)
+
+    def set_score(self, score: int, kind: str) -> None:
+        self._kind = kind
+        target = float(max(0, min(3, score)) + 1)         # "too short" still lights one red segment
+        if motion.reduced() or not self.isVisible():
+            self._level = target
+            self.update()
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._level)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def _glide(self, v) -> None:
+        self._level = float(v)
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        gap, n = 4.0, 4
+        w = (self.width() - gap * (n - 1)) / n
+        h = self.height() - 2.0
+        p.setPen(Qt.PenStyle.NoPen)
+        for i in range(n):
+            x = i * (w + gap)
+            p.setBrush(theme.qcolor("surface_alt"))
+            p.drawRoundedRect(QRectF(x, 1, w, h), h / 2, h / 2)
+            fill = max(0.0, min(1.0, self._level - i))
+            if fill > 0:
+                p.setBrush(theme.qcolor(self._kind))
+                p.drawRoundedRect(QRectF(x, 1, w * fill, h), h / 2, h / 2)
+        p.end()
+
+
 class ProgressRing(QWidget):
     """A small ring that fills as steps get done, "1/3" in the middle: progress at a glance."""
 
@@ -1682,6 +1728,96 @@ class DropOverlay(QWidget):
         p.setPen(theme.qcolor("text_muted"))
         detail = QFontMetrics(body).elidedText(self._detail, Qt.TextElideMode.ElideMiddle, int(card.width()) - 40)
         p.drawText(QRectF(card.left(), card.top() + 146, card.width(), 22), Qt.AlignmentFlag.AlignCenter, detail)
+        p.end()
+
+
+class ShortcutSheet(QWidget):
+    """
+    The keyboard shortcuts, floating over whatever you are doing (⌘/): each one with its keys drawn as keycaps.
+    Esc, a click anywhere or ⌘/ again closes it.
+    """
+
+    def __init__(self, parent: QWidget, rows: list):
+        super().__init__(parent)
+        self._rows = rows                                 # (what it does, "⌘ F")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        parent.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.parent() and ev.type() == QEvent.Type.Resize:
+            self.setGeometry(self.parentWidget().rect())
+        return False
+
+    def toggle(self) -> None:
+        if self.isVisible():
+            self.hide()
+            return
+        self.setGeometry(self.parentWidget().rect())
+        self.raise_()
+        self.show()
+        self.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        motion.fade_in(self, motion.FAST)
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() == Qt.Key.Key_Escape:
+            self.hide()
+        else:
+            super().keyPressEvent(e)
+
+    def mousePressEvent(self, _e) -> None:
+        self.hide()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        veil = theme.qcolor("bg")
+        veil.setAlphaF(0.82)
+        p.fillRect(self.rect(), veil)
+        row_h = 34
+        w = min(560.0, self.width() - 60.0)
+        h = 92 + row_h * len(self._rows)
+        card = QRectF((self.width() - w) / 2, max(20.0, (self.height() - h) / 2), w, h)
+        p.setPen(QPen(theme.qcolor("primary_line"), 1))
+        p.setBrush(theme.qcolor("surface"))
+        p.drawRoundedRect(card, 18, 18)
+        title = QFont(self.font())
+        title.setFamily(theme.mono_family())
+        title.setPixelSize(18)
+        title.setBold(True)
+        p.setFont(title)
+        p.setPen(theme.qcolor("text"))
+        p.drawText(QRectF(card.left() + 26, card.top() + 20, w - 52, 26), Qt.AlignmentFlag.AlignLeft, "Keyboard shortcuts")
+        small = QFont(self.font())
+        small.setPixelSize(11)
+        p.setFont(small)
+        p.setPen(theme.qcolor("text_faint"))
+        p.drawText(QRectF(card.left() + 26, card.top() + 20, w - 52, 26),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Esc to close")
+        body, cap = QFont(self.font()), QFont(self.font())
+        body.setPixelSize(13)
+        cap.setFamily(theme.mono_family())
+        cap.setPixelSize(12)
+        cap.setBold(True)
+        y = card.top() + 66
+        for what, keys in self._rows:
+            p.setFont(body)
+            p.setPen(theme.qcolor("text_muted"))
+            p.drawText(QRectF(card.left() + 26, y, w * 0.55, row_h), Qt.AlignmentFlag.AlignVCenter, what)
+            p.setFont(cap)
+            fm = QFontMetrics(cap)
+            x = card.right() - 26
+            for k in reversed(keys.split()):              # keycaps, right-aligned
+                kw = max(24, fm.horizontalAdvance(k) + 14)
+                x -= kw
+                box = QRectF(x, y + 5, kw, row_h - 10)
+                p.setPen(QPen(theme.qcolor("border_strong"), 1))
+                p.setBrush(theme.qcolor("surface_alt"))
+                p.drawRoundedRect(box, 6, 6)
+                p.setPen(theme.qcolor("primary"))
+                p.drawText(box, Qt.AlignmentFlag.AlignCenter, k)
+                x -= 6
+            y += row_h
         p.end()
 
 

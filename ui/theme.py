@@ -242,6 +242,10 @@ QPushButton[chip="key"] {{ font-family: "{mono}"; font-size: 12px; font-weight: 
                           background: {t['primary_soft']}; border: 1px solid {t['primary_line']}; border-radius: 15px;
                           padding: 6px 12px; }}
 QPushButton[chip="key"]:hover {{ border-color: {t['primary']}; }}
+QPushButton[chip="person"] {{ font-family: "{mono}"; font-size: 11px; font-weight: 700; color: {t['primary_on_soft']};
+                             background: {t['primary_soft']}; border: 1px solid {t['primary_line']}; border-radius: 11px;
+                             padding: 3px 10px; }}
+QPushButton[chip="person"]:hover, QPushButton[chip="person"]:focus {{ border-color: {t['primary']}; }}
 QPushButton[chip="key"]:focus {{ border-color: {t['primary']}; }}
 QWidget#ActivityRow {{ border-radius: 10px; border: 1px solid transparent; }}
 QWidget#VaultRow {{ border-radius: 10px; }}

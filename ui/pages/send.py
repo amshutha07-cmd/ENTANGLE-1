@@ -5,6 +5,7 @@ import os
 from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout, QWidget,
 )
@@ -17,7 +18,7 @@ from ui import art, motion
 from ui.widgets import (
     Avatar, Banner, Button, Card, EmptyState, Fingerprint, KeyValue, ListRow, Pill,
     FitStack, ProgressPanel, Stepper, escape_goes_back, file_icon, friendly_date, human_size, label, on_enter,
-    time_ago, esc_clears,
+    time_ago, esc_clears, PieceMap,
 )
 
 TRUST_PILL = {"verified": ("Verified", "success"), "unverified": ("Not verified", "warning"),
@@ -174,6 +175,9 @@ class SendPage(Page):
         rl.addWidget(self.trust_banner)
         self.send_btn = Button("Send securely", "primary", "send", "lg")
         self.send_btn.clicked.connect(self._send)
+        go = QShortcut(QKeySequence("Ctrl+Return"), self.send_btn.parentWidget() or self, self._send_shortcut)
+        go.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.send_btn.setToolTip(f"Send it   {QKeySequence('Ctrl+Return').toString(QKeySequence.SequenceFormat.NativeText)}")
         send_row = QHBoxLayout()
         self.review_back = Button("Back", "ghost", "back")
         self.review_back.clicked.connect(self._back)
@@ -285,9 +289,11 @@ class SendPage(Page):
             it.setData(Qt.ItemDataRole.UserRole, e["id"])
             it.setSizeHint(QSize(0, 62))
             self.files.addItem(it)
+            st = e.get("storage") or {}
             self.files.setItemWidget(it, ListRow(e["original_filename"], f"{human_size(e.get('size'))} · {friendly_date(e['date_vaulted'])}",
                                                    icon=file_icon(e["original_filename"])[0],
-                                                   icon_kind=file_icon(e["original_filename"])[1]))
+                                                   icon_kind=file_icon(e["original_filename"])[1],
+                                                   right=[PieceMap(st.get("cloud", 0), st.get("inline", 0))]))
             if e["id"] == self.entry_id or e["id"] in self.entry_ids:
                 it.setSelected(True)
                 if e["id"] == self.entry_id:
@@ -539,6 +545,10 @@ class SendPage(Page):
         if self.recipient and verify_fingerprint(self, self.recipient, self.rv_fp.raw()):
             self.ctl.verify_contact(self.recipient)
             self._fill_review()
+
+    def _send_shortcut(self) -> None:
+        if self.send_btn.isVisible() and self.send_btn.isEnabled():   # ⌘↩ on the review step, same as the button
+            self._send()
 
     def _send(self) -> None:
         if self._is_batch():

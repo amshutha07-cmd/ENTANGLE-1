@@ -1163,3 +1163,34 @@ def test_the_status_bar_says_files_are_end_to_end_encrypted():
     texts = [w.text() for w in win.findChildren(QLabel)]
     assert "End-to-end encrypted" in texts
     win.close()
+
+
+def test_send_again_chips_lead_to_send_with_the_person_chosen(signed_in):
+    from PyQt6.QtWidgets import QPushButton
+    ctl, win = signed_in
+    SecurityCore.pin_discovered_contact("again_sam", SecurityCore.load_identity_for_user("ux_user")["public_key"], "relay")
+    ctl.outbox = [{"id": "a1", "to": "again_sam", "size": 1, "created": int(time.time()), "state": "delivered"}]
+    win.go("home")
+    win.pages["home"].refresh()
+    chips = [b for b in win.pages["home"].findChildren(QPushButton) if b.property("chip") == "person"]
+    assert [c.text() for c in chips] == ["again_sam"]
+    chips[0].click()
+    assert win.content.currentWidget() is win.pages["send"] and win.pages["send"].recipient == "again_sam"
+    ctl.outbox = []
+
+
+def test_after_a_lock_you_come_back_where_you_were_and_see_when_it_locks(signed_in):
+    ctl, win = signed_in
+    win.go("contacts")
+    win._session_ended()                                             # locked while on People & keys
+    win._session_started("ux_user")
+    assert win.content.currentWidget() is win.pages["contacts"]
+    assert win.chip_state.text().startswith("Locks in") or win.chip_state.text() == "Unlocked"
+
+
+def test_storage_accounts_show_which_company_holds_them():
+    from ui.pages.settings import _provider
+    assert _provider({"endpoint_url": "https://abc.r2.cloudflarestorage.com"})[0] == "Cloudflare R2"
+    assert _provider({"endpoint_url": "https://s3.us-west-002.backblazeb2.com"})[0] == "Backblaze B2"
+    assert _provider({"endpoint_url": ""})[0] == "Amazon S3"
+    assert _provider({"endpoint_url": "https://minio.example.com"})[0] == "S3-compatible"

@@ -269,7 +269,9 @@ class InboxPage(Page):
             b._btn.setVisible(trust == "unverified")
         # A changed key is the one case where accepting should not be the obvious, highlighted choice.
         self.accept_btn.set_variant("secondary" if trust == "changed" else "primary")
-        self.accept_btn.setText("Accept anyway" if trust == "changed" else "Accept and open")
+        size = human_size(it.get("size"))                 # what you are saying yes to, right on the button
+        self.accept_btn.setText((("Accept anyway" if trust == "changed" else "Accept and open") + f"  ·  {size}")
+                                if size and size != "—" else ("Accept anyway" if trust == "changed" else "Accept and open"))
         busy = self._job is not None
         self.accept_btn.setEnabled(not busy)
         self.decline_btn.setEnabled(not busy)

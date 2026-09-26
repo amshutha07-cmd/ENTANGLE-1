@@ -15,9 +15,19 @@ from ui.controller import pref, set_pref
 from ui.dialogs import StorageDialog, confirm
 from ui.pages.base import Page
 from ui.pages.vault import open_folder
-from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, label
+from ui.widgets import clear_layout, Banner, Button, Card, EmptyState, IconBadge, KeyValue, Pill, label
 
 AUTO_LOCK_CHOICES = [("Never", 0), ("After 5 minutes", 5), ("After 10 minutes", 10), ("After 30 minutes", 30), ("After 1 hour", 60)]
+
+
+def _provider(target: dict) -> tuple[str, str]:
+    """(provider name, badge colour) from a storage account's endpoint, so the mix of companies shows at a glance."""
+    end = (target.get("endpoint_url") or "").lower()
+    if "r2.cloudflarestorage.com" in end:
+        return "Cloudflare R2", "warning"
+    if "backblazeb2" in end:
+        return "Backblaze B2", "danger"
+    return ("Amazon S3", "info") if not end else ("S3-compatible", "primary")
 
 
 class StorageRow(QWidget):
@@ -26,7 +36,8 @@ class StorageRow(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(12)
-        lay.addWidget(IconBadge("cloud", "neutral", 38))
+        provider, kind = _provider(target)
+        lay.addWidget(IconBadge("cloud", kind, 38))
         col = QVBoxLayout()
         col.setSpacing(1)
         name = label(target["name"], "body", wrap=False)
@@ -35,6 +46,7 @@ class StorageRow(QWidget):
         col.addWidget(name)
         col.addWidget(label(f"{target['bucket']} · {host}", "muted", wrap=False))
         lay.addLayout(col, 1)
+        lay.addWidget(Pill(provider.upper(), kind))
         edit = Button("Edit", "secondary", size="sm")
         rm = Button("", "ghost", "trash", "sm")
         rm.setToolTip("Remove this storage account")

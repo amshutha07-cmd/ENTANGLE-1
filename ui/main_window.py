@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from typing import Optional
 from urllib.parse import urlparse
@@ -26,8 +27,8 @@ from ui.pages.send import SendPage
 from ui.pages.settings import SettingsPage
 from ui.pages.vault import VaultPage
 from ui.widgets import (
-    Avatar, Banner, Button, ClickablePill, DropOverlay, IconBadge, NavButton, NavGlider, Pill, ToastHost, file_icon,
-    label,
+    Avatar, Banner, Button, ClickablePill, DropOverlay, IconBadge, NavButton, NavGlider, Pill, ShortcutSheet, ToastHost,
+    file_icon, label,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,10 @@ class MainWindow(QMainWindow):
         self._idle_warn = QTimer(self)                 # a heads-up shortly before locking
         self._idle_warn.setSingleShot(True)
         self._idle_warn.timeout.connect(self._idle_warning)
+        self._lock_clock = QTimer(self)                # "Unlocked · locks in 9 min" under your name
+        self._lock_clock.setInterval(15 * 1000)
+        self._lock_clock.timeout.connect(self._show_lock_time)
+        self._resume: Optional[tuple] = None           # (who, page) when a session ended: unlock goes back there
         # App-wide event filters are children of this window, so Qt removes them when the window goes. Unowned, they
         # outlived it and kept calling into a deleted window on every click (a crash).
         self._watcher = _ActivityWatcher(self._activity, self)
@@ -367,10 +372,15 @@ class MainWindow(QMainWindow):
             self.pages["inbox"]._open_package()
 
     def _show_shortcuts(self) -> None:
-        if self.root_stack.currentIndex() == 1:
-            self.go("settings")
-            page = self.pages["settings"]
-            page.ensureWidgetVisible(page.shortcuts_card)
+        """⌘/: the shortcuts, floating over the current page (not a trip to Settings)."""
+        if getattr(self, "_sheet", None) is None:
+            mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+            rows = [("Home, Protect, Send, Inbox, People, Settings", f"{mod} 1…6"), ("Search on this page", f"{mod} F"),
+                    ("Protect a file", f"{mod} O"), ("Settings", f"{mod} ,"), ("Lock now", f"{mod} L"),
+                    ("Close the window", f"{mod} W"), ("These shortcuts", f"{mod} /"),
+                    ("Move along the sidebar", "↑ ↓"), ("Move between buttons", "Tab"), ("Empty a search box", "Esc")]
+            self._sheet = ShortcutSheet(self.centralWidget(), rows)
+        self._sheet.toggle()
 
     def _support_report(self) -> None:
         self.bring_to_front()
@@ -379,11 +389,41 @@ class MainWindow(QMainWindow):
         self.pages["settings"].save_support_report()
 
     def _about(self) -> None:
-        from ui import dialogs
-        dialogs.info(self, "About A.N.Sx Vault",
-                     f"Version {APP_VERSION}\n\nSend files that only the right person can open. Files are encrypted on "
-                     "this computer, split into 12 pieces (any 8 rebuild them) and sealed for one person's key. "
-                     "The relay and cloud storage only ever see encrypted pieces.")
+        from PyQt6.QtWidgets import QDialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About A.N.Sx Vault")
+        dlg.setMinimumWidth(440)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(30, 28, 30, 22)
+        lay.setSpacing(10)
+        logo = QLabel()
+        logo.setPixmap(icons.app_icon().pixmap(88, 88))
+        name = label("A.N.Sx Vault", "display", wrap=False)
+        ver = label(f"Version {APP_VERSION}", "faint", wrap=False)
+        tag = label("Send files that only the right person can open.", "muted", wrap=False)
+        for w in (logo, name, ver, tag):
+            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.addWidget(w)
+        facts = QHBoxLayout()                             # what protects your files, in three words each
+        facts.addStretch(1)
+        for text in ("AES-256-GCM", "12 PIECES · ANY 8", "RSA-4096 KEYS"):
+            facts.addWidget(Pill(text, "primary"))
+        facts.addStretch(1)
+        lay.addSpacing(4)
+        lay.addLayout(facts)
+        body = label("Files are encrypted on this computer, split into 12 pieces and sealed for one person's key. "
+                     "The relay and cloud storage only ever see encrypted pieces.", "body")
+        body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addSpacing(6)
+        lay.addWidget(body)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close = Button("Close", "primary")
+        close.clicked.connect(dlg.accept)
+        row.addWidget(close)
+        lay.addSpacing(8)
+        lay.addLayout(row)
+        dlg.exec()
 
     def _wire(self) -> None:
         ctl = self.ctl
@@ -587,19 +627,26 @@ class MainWindow(QMainWindow):
 
     def _session_started(self, name: str) -> None:
         set_pref("last_operator", name)                   # pre-selected on the sign-in screen next time
+        self._signed_in_as = name
         self.chip_name.setText(name)
         self.chip_avatar.set_name(name)
         self.root_stack.setCurrentIndex(1)
         motion.fade_in(self.root_stack.currentWidget(), motion.NORMAL)
         self._storage_pill()
         self._engine_check()
-        self.go("home")
+        resume, self._resume = self._resume, None
+        self.go(resume[1] if resume and resume[0] == name else "home")   # back where you were before it locked
         self._activity()
+        self._lock_clock.start()
         self.ctl.run_job(self.ctl.make_directory_job())          # quietly learn who is on the relay
 
     def _session_ended(self) -> None:
+        page = next((k for k, w in self.pages.items() if w is self.content.currentWidget()), "home")
+        if getattr(self, "_signed_in_as", ""):
+            self._resume = (self._signed_in_as, page)
         self._idle.stop()
         self._idle_warn.stop()
+        self._lock_clock.stop()
         for page in self.pages.values():
             page.on_session_ended()
         self._set_waiting(0)
@@ -637,6 +684,19 @@ class MainWindow(QMainWindow):
         else:
             self._idle.stop()
             self._idle_warn.stop()
+        self._show_lock_time()
+
+    def _show_lock_time(self) -> None:
+        """Under your name in the sidebar: when the vault will lock itself, so it never takes you by surprise."""
+        if not self.ctl.operator:
+            return
+        if not self._idle.isActive():
+            self.chip_state.setText("Unlocked")
+            return
+        secs = self._idle.remainingTime() // 1000
+        self.chip_state.setText("Locks in <1 min" if secs < 60 else f"Locks in {-(-secs // 60)} min")   # fits the chip
+        self.chip_state.setToolTip("Unlocked. It locks itself when you have been away this long (Settings → Appearance "
+                                   "and privacy).")
 
     # ── status / feedback ────────────────────────────────────────────────────
     def toasts_show(self, message: str, kind: str = "info") -> None:

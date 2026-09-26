@@ -170,6 +170,7 @@ class KeyChip(QPushButton):
 
 class HomePage(Page):
     navigate = pyqtSignal(str)
+    send_to_requested = pyqtSignal(str)                   # "send again" chips -> Send, person already chosen
 
     def __init__(self, ctl):
         super().__init__(ctl, "Home", "")
@@ -181,6 +182,9 @@ class HomePage(Page):
         self.card_protect = ActionCard("shield", "Protect a file", "Encrypt it and keep it safe, ready to send.")
         self.card_send = ActionCard("send", "Send a file", "Only the person you choose can open it.")
         self.card_inbox = ActionCard("inbox", "Inbox", "Files people have sent you.")
+        self.again_row = QHBoxLayout()                    # the people you send to most, one click away
+        self.again_row.setSpacing(6)
+        self.card_send.body.addLayout(self.again_row)
         row = QHBoxLayout()
         row.setSpacing(14)
         for c, key in ((self.card_protect, "vault"), (self.card_send, "send"), (self.card_inbox, "inbox")):
@@ -328,6 +332,7 @@ class HomePage(Page):
                                         else f"Last sent to {latest['to']}, {when}.")
         else:
             self.card_send.text.setText(self.card_send.default_text)
+        self._fill_again()
         senders = sorted({i.get("from", "") for i in ctl.inbox or []} - {""})
         self.card_inbox.text.setText(f"{waiting} file{'s' if waiting != 1 else ''} from {_names(senders)}, waiting for "
                                      "you to accept." if waiting and senders else
@@ -335,6 +340,25 @@ class HomePage(Page):
                                      if waiting else
                                      (f"Nothing new. People send to your name, {ctl.operator}." if ctl.operator
                                       else self.card_inbox.default_text))
+
+    def _fill_again(self) -> None:
+        clear_layout(self.again_row)
+        recent: list = []
+        for o in sorted(self.ctl.outbox or [], key=lambda o: o.get("created", 0), reverse=True):
+            if o.get("to") and o["to"] not in recent:
+                recent.append(o["to"])
+        if not recent:
+            return
+        self.again_row.addWidget(label("Send again", "faint", wrap=False))
+        for name in recent[:3]:
+            chip = QPushButton(name)
+            chip.setProperty("chip", "person")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            chip.setToolTip(f"Send {name} a file")
+            chip.clicked.connect(lambda _c=False, n=name: self.send_to_requested.emit(n))
+            self.again_row.addWidget(chip)
+        self.again_row.addStretch(1)
 
     def _fill_spark(self) -> None:
         items = __import__("activity").recent(1000, operator=self.ctl.operator or "")
