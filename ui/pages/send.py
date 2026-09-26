@@ -209,8 +209,13 @@ class SendPage(Page):
         row.addStretch()
         again = Button("Send another", "secondary", "send")
         again.clicked.connect(self.reset)
+        self.again_same = Button("", "secondary", "users")   # "Send sam another": same person, pick the next file
+        self.again_same.clicked.connect(self._again_same)
+        self.again_same.hide()
+        self._last_to = ""
         track = Button("See sent items", "primary", "inbox")
         track.clicked.connect(lambda: self.navigate.emit("sent"))
+        row.addWidget(self.again_same)
         row.addWidget(again)
         row.addWidget(track)
         row.addStretch()
@@ -243,6 +248,12 @@ class SendPage(Page):
 
     def on_session_ended(self) -> None:
         self.reset()
+
+    def _again_same(self) -> None:
+        name = self._last_to
+        self.reset()
+        if name:
+            self.send_to(name)
 
     def reset(self) -> None:
         self.entry_id = self.recipient = None
@@ -576,6 +587,9 @@ class SendPage(Page):
         self.progress.finish()
         self.ctl.after_send(entry, result["to"], result.get("id", ""))
         self.done_title.setText(f"Sent to {result['to']}")
+        self._last_to = result["to"]
+        self.again_same.setText(f"Send {result['to']} another")
+        self.again_same.show()
         self.done_text.setText(f"“{entry['original_filename']}” is in {result['to']}'s inbox. They choose whether to accept it, "
                                "and you'll get a notification when they do.")
         motion.reveal(self.done, motion.SLOW)
@@ -659,6 +673,7 @@ class SendPage(Page):
             motion.reveal(self.error)
             return
         people = sorted({p for _f, p in done})
+        self.again_same.hide()                            # several people: "Send another" starts afresh
         self.done_title.setText(f"Sent {len(done)} of {self._batch_total}" if failed else
                                 f"Sent to {', '.join(people[:3])}" + (" and more" if len(people) > 3 else ""))
         text = f"{len(done)} send{'s' if len(done) != 1 else ''} are waiting in people's inboxes. You'll get a " \

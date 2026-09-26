@@ -1218,3 +1218,13 @@ def test_offline_you_can_try_again_right_away(signed_in, monkeypatch):
     assert tried
     page._show_connection("conflict")
     assert not page.conn_retry.isVisible()                          # retrying cannot fix a taken name
+
+
+def test_after_sending_you_can_send_the_same_person_another(signed_in, monkeypatch):
+    _ctl, win = signed_in
+    page = win.pages["send"]
+    asked = []
+    monkeypatch.setattr(page, "send_to", lambda name: asked.append(name))
+    page._last_to = "sam"
+    page._again_same()
+    assert asked == ["sam"]
