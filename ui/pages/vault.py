@@ -15,7 +15,7 @@ from ui import motion, theme
 from ui.widgets import (
     clear_layout,
     Banner, Button, Card, DropZone, ElidedLabel, EmptyState, IconBadge, ProgressPanel, file_icon, friendly_date,
-    human_size, label, esc_clears,
+    human_size, label, esc_clears, PieceMap,
 )
 
 
@@ -50,6 +50,7 @@ class VaultRow(QWidget):
         col.addWidget(name)
         col.addWidget(ElidedLabel(sub, "muted"))
         lay.addLayout(col, 1)
+        lay.addWidget(PieceMap(cloud, inline), 0, Qt.AlignmentFlag.AlignVCenter)   # where its 12 pieces are
         send = Button("Send", "primary", "send", "sm")
         restore = Button("Restore", "secondary", "download", "sm")
         remove = Button("", "ghost", "trash", "sm")

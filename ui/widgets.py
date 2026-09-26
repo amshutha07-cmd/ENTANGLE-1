@@ -869,6 +869,50 @@ class KeyValue(QWidget):
         self.value.setText(value)
 
 
+class KeyArt(QWidget):
+    """
+    A picture of a key: a mirrored 5×5 pattern drawn from its fingerprint, like the "blockies" wallets show next to
+    addresses. The same key always draws the same picture, so two screens side by side compare at a glance. It
+    helps the eye; the digits stay the real check.
+    """
+
+    def __init__(self, size: int = 40, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._fp = ""
+        self.setToolTip("A picture of this key: the same key always draws the same pattern. Compare the digits to be sure.")
+
+    def set(self, fp: str) -> None:
+        self._fp = fp
+        self.setVisible(bool(fp))
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        if not self._fp:
+            return
+        d = hashlib.sha256(self._fp.encode()).digest()
+        light = 0.6 if theme.current() == "dark" else 0.42
+        ink = QColor.fromHslF(d[0] / 255, 0.78, light)
+        ink2 = QColor.fromHslF(((d[0] + 96 + d[1] // 2) % 256) / 255, 0.72, light)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(theme.qcolor("border"), 1))
+        p.setBrush(theme.qcolor("bg"))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+        pad, n = 5.0, 5
+        cell = (self.width() - 2 * pad) / n
+        p.setPen(Qt.PenStyle.NoPen)
+        for r in range(n):
+            for c in range(3):                            # left half and middle, mirrored to the right
+                kind = d[2 + r * 3 + c] % 3
+                if not kind:
+                    continue
+                p.setBrush(ink if kind == 1 else ink2)
+                for col in {c, n - 1 - c}:
+                    p.drawRoundedRect(QRectF(pad + col * cell + 0.6, pad + r * cell + 0.6, cell - 1.2, cell - 1.2), 1.5, 1.5)
+        p.end()
+
+
 class Fingerprint(QFrame):
     """A key fingerprint in readable groups, with a copy button."""
 
@@ -877,6 +921,9 @@ class Fingerprint(QFrame):
         self.setObjectName("CardAlt")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 10, 10, 10)
+        self.art = KeyArt(40)                             # the key as a picture, for a quick side-by-side look
+        self.art.hide()
+        lay.addWidget(self.art)
         self.text = label("—", "mono", selectable=True)
         self.text.setStyleSheet("font-size: 14px; letter-spacing: 1px;")
         copy = self.copy_btn = Button("", "ghost", "copy", "sm")
@@ -905,6 +952,7 @@ class Fingerprint(QFrame):
         parts = fp.split()
         self._final = "\n".join([" ".join(parts[:4]), " ".join(parts[4:])]) if len(parts) == 8 else (fp or "—")
         self._raw = fp
+        self.art.set(fp)
         motion.scramble(self.text, self._final)           # it resolves like a hash (plain text if motion is off)
 
     def raw(self) -> str:
@@ -1166,6 +1214,85 @@ class ShardStrip(QWidget):
                 p.setPen(QPen(theme.qcolor("border_strong"), 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRoundedRect(cell.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+        p.end()
+
+
+class PieceMap(QWidget):
+    """Where a protected file's pieces are, at a glance: mint in cloud storage, violet inside the package."""
+
+    def __init__(self, cloud: int, inline: int, parent=None):
+        super().__init__(parent)
+        self._cloud, self._inline = max(0, cloud), max(0, inline)
+        n = self._cloud + self._inline
+        self.setFixedSize(max(1, n) * 7 - 2, 14)
+        self.setToolTip("All pieces inside the package" if not self._cloud else
+                        f"{self._cloud} of {n} pieces in cloud storage" + (f", {self._inline} inside the package"
+                                                                             if self._inline else ""))
+        self.setVisible(n > 0)
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        for i in range(self._cloud + self._inline):
+            p.setBrush(theme.qcolor("primary" if i < self._cloud else "accent"))
+            p.drawRoundedRect(QRectF(i * 7, 1, 5, 12), 1.5, 1.5)
+        p.end()
+
+
+class Sparkline(QWidget):
+    """A small neon line of counts over time (e.g. activity per day), with a soft glow under it."""
+
+    def __init__(self, width: int = 150, height: int = 28, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self._values: list = []
+
+    def set_values(self, values: list, tip: str = "") -> None:
+        self._values = list(values)
+        self.setToolTip(tip)
+        self.setVisible(any(self._values))
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        vals = self._values
+        if len(vals) < 2:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h, pad = self.width(), self.height(), 3.0
+        top = max(vals) or 1
+        step = (w - 2 * pad) / (len(vals) - 1)
+        pts = [(pad + i * step, h - pad - (v / top) * (h - 2 * pad)) for i, v in enumerate(vals)]
+        line = QPainterPath()
+        line.moveTo(*pts[0])
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):          # gentle curves between the days
+            mid = (x0 + x1) / 2
+            line.cubicTo(mid, y0, mid, y1, x1, y1)
+        glow = QPainterPath(line)
+        glow.lineTo(pts[-1][0], h)
+        glow.lineTo(pts[0][0], h)
+        glow.closeSubpath()
+        fade = QLinearGradient(0, 0, 0, h)
+        soft = theme.qcolor("primary")
+        soft.setAlphaF(0.22)
+        clear = theme.qcolor("primary")
+        clear.setAlphaF(0.0)
+        fade.setColorAt(0.0, soft)
+        fade.setColorAt(1.0, clear)
+        p.fillPath(glow, QBrush(fade))
+        neon = QLinearGradient(0, 0, w, 0)
+        neon.setColorAt(0.0, theme.qcolor("accent"))
+        neon.setColorAt(1.0, theme.qcolor("primary"))
+        pen = QPen(QBrush(neon), 1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(line)
+        x, y = pts[-1]                                     # today, as a bright dot
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.qcolor("primary"))
+        p.drawEllipse(QRectF(x - 2.5, y - 2.5, 5, 5))
         p.end()
 
 

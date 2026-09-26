@@ -1122,3 +1122,44 @@ def test_transfers_still_on_their_way_pulse_in_the_sent_list(signed_in, motion_o
     pills = {p.text(): p for p in page.sent_list.findChildren(Pill)}
     assert pills["Uploading"]._ansx_breathe_anim is not None and getattr(pills["Delivered"], "_ansx_breathe_anim", None) is None
     ctl.outbox = []
+
+
+def test_the_same_key_always_draws_the_same_picture():
+    from ui.widgets import KeyArt
+    a, b, c = KeyArt(40), KeyArt(40), KeyArt(40)
+    k1 = "C68AD634 A743A4D9 90D8B70C 74A437F3 97DA86D8 7337BD35 B0CD9C45 1498BCC4"
+    k2 = "49730985 7D9102BD B85F5AC1 BE304531 4AFAD494 C0218DB0 AD9E3841 3EAE4D85"
+    a.set(k1)
+    b.set(k1)
+    c.set(k2)
+    for w in (a, b, c):
+        w.show()
+    assert a.grab().toImage() == b.grab().toImage() and a.grab().toImage() != c.grab().toImage()
+    a.set("")
+    assert a.isHidden()
+
+
+def test_each_protected_file_shows_where_its_pieces_are():
+    from ui.widgets import PieceMap
+    assert PieceMap(0, 12).toolTip() == "All pieces inside the package"
+    assert PieceMap(8, 4).toolTip() == "8 of 12 pieces in cloud storage, 4 inside the package"
+    assert PieceMap(12, 0).toolTip() == "12 of 12 pieces in cloud storage"
+    assert PieceMap(0, 0).isHidden()
+
+
+def test_home_draws_the_last_two_weeks_as_a_sparkline(signed_in):
+    import activity
+    _ctl, win = signed_in
+    activity.add("protected", "Protected spark.pdf", operator="ux_user")
+    win.go("home")
+    pump()
+    spark = win.pages["home"].spark
+    assert len(spark._values) == 14 and spark._values[-1] >= 1 and not spark.isHidden()
+    assert "today" in spark.toolTip() and not spark.grab().isNull()
+
+
+def test_the_status_bar_says_files_are_end_to_end_encrypted():
+    win = MainWindow(AppController())
+    texts = [w.text() for w in win.findChildren(QLabel)]
+    assert "End-to-end encrypted" in texts
+    win.close()

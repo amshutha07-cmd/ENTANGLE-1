@@ -10,7 +10,7 @@ import platform_secret
 from ui import icons, motion, theme
 from ui.pages.base import Page
 from ui.widgets import (
-    Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, ProgressRing, clear_layout, label, time_ago,
+    Button, Card, ClickableCard, ElidedLabel, IconBadge, Pill, ProgressRing, Sparkline, clear_layout, label, time_ago,
 )
 
 ACTIVITY_STYLE = {
@@ -227,7 +227,11 @@ class HomePage(Page):
         self.tile_storage.action.clicked.connect(lambda: self.navigate.emit("settings"))
         self.root.addLayout(tiles)
 
-        self.root.addWidget(label("RECENT ACTIVITY", "eyebrow", wrap=False))
+        head = QHBoxLayout()
+        head.addWidget(label("RECENT ACTIVITY", "eyebrow", wrap=False), 1, Qt.AlignmentFlag.AlignBottom)
+        self.spark = Sparkline(150, 26)                   # the last 14 days, at a glance
+        head.addWidget(self.spark, 0, Qt.AlignmentFlag.AlignBottom)
+        self.root.addLayout(head)
         self.activity = Card(padding=6, spacing=0)
         self.root.addWidget(self.activity)
         self.root.addStretch(1)
@@ -332,7 +336,20 @@ class HomePage(Page):
                                      (f"Nothing new. People send to your name, {ctl.operator}." if ctl.operator
                                       else self.card_inbox.default_text))
 
+    def _fill_spark(self) -> None:
+        items = __import__("activity").recent(1000, operator=self.ctl.operator or "")
+        today = datetime.date.today()
+        days = [today - datetime.timedelta(days=13 - i) for i in range(14)]
+        counts = {d: 0 for d in days}
+        for it in items:
+            d = datetime.date.fromtimestamp(it.get("ts", 0))
+            if d in counts and it.get("kind") != "security":   # files moving, not locking and unlocking
+                counts[d] += 1
+        values = [counts[d] for d in days]
+        self.spark.set_values(values, f"{sum(values)} things done in the last 14 days · {values[-1]} today")
+
     def _fill_activity(self) -> None:
+        self._fill_spark()
         lay = self.activity.body
         clear_layout(lay)
         items = __import__("activity").recent(8, operator=self.ctl.operator or "")

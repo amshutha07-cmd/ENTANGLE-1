@@ -10,8 +10,8 @@ from urllib.parse import urlparse
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow, QMenu, QPushButton, QStackedWidget, QSystemTrayIcon,
-    QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton, QStackedWidget,
+    QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 import engine
@@ -232,6 +232,14 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.work_pill)
         lay.addWidget(self.engine_banner_pill)
         lay.addStretch(1)
+        self._e2e_icon = QLabel()                         # a quiet reminder of what the app guarantees
+        self._e2e_icon.setPixmap(icons.pixmap("lock", theme.color("text_faint"), 12))
+        e2e = label("End-to-end encrypted", "faint", wrap=False)
+        tip = "Files are encrypted on this computer and can only be opened by the person you send them to."
+        for w in (self._e2e_icon, e2e):
+            w.setToolTip(tip)
+            lay.addWidget(w)
+        lay.addSpacing(10)
         lay.addWidget(label(f"v{APP_VERSION}", "faint", wrap=False))
         return bar
 
@@ -699,6 +707,7 @@ class MainWindow(QMainWindow):
         from ui.art import Illustration
         for w in self.findChildren(Illustration):         # background circle and shadow follow the theme
             w.retheme()
+        self._e2e_icon.setPixmap(icons.pixmap("lock", theme.color("text_faint"), 12))
         if self._tray:                                     # the menu bar has its own light/dark, not the app's:
             self._tray.setIcon(icons.app_icon())           # keep the dark tile, readable on either
         page = self.content.currentWidget()
