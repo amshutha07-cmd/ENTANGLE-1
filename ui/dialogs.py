@@ -196,7 +196,7 @@ class VerifyDialog(QDialog):
     def _show(self) -> None:
         n = len(self.groups)
         self.step.setText(f"GROUP {self.index + 1} OF {n}")
-        self.group.setText(self.groups[self.index] if self.groups else "")
+        motion.scramble(self.group, self.groups[self.index] if self.groups else "", 500)   # each group resolves
         for i, d in enumerate(self._dots):
             col = theme.color("success") if i < self.index else theme.color("primary") if i == self.index \
                 else theme.color("border_strong")

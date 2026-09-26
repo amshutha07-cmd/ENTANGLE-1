@@ -888,7 +888,7 @@ class Fingerprint(QFrame):
     def _copy(self) -> None:
         """Copy, and show that it worked: a check mark and "Copied" for a moment."""
         from PyQt6.QtWidgets import QToolTip
-        QApplication.clipboard().setText(self.text.text())
+        QApplication.clipboard().setText(getattr(self, "_final", self.text.text()))   # never a mid-reveal frame
         self.copy_btn.set_icon("check")
         self.copy_btn.setToolTip("Copied")
         QToolTip.showText(self.copy_btn.mapToGlobal(self.copy_btn.rect().bottomLeft()), "Copied", self.copy_btn)
@@ -899,10 +899,13 @@ class Fingerprint(QFrame):
         self.copy_btn.setToolTip("Copy")
 
     def set(self, fp: str) -> None:
+        if fp == getattr(self, "_raw", None) and fp:
+            return                                        # the same key again: nothing to reveal
         # two lines of four groups reads much better than one 71-character run
         parts = fp.split()
-        self.text.setText("\n".join([" ".join(parts[:4]), " ".join(parts[4:])]) if len(parts) == 8 else (fp or "—"))
+        self._final = "\n".join([" ".join(parts[:4]), " ".join(parts[4:])]) if len(parts) == 8 else (fp or "—")
         self._raw = fp
+        motion.scramble(self.text, self._final)           # it resolves like a hash (plain text if motion is off)
 
     def raw(self) -> str:
         return getattr(self, "_raw", "")
@@ -1078,6 +1081,94 @@ class NeonBar(QProgressBar):
         p.end()
 
 
+class ShardStrip(QWidget):
+    """
+    A file's 12 encrypted pieces as a row of cells that light up as the work goes (any 8 rebuild the file). The
+    piece being worked on flickers through hex digits, as if it were being hashed; with no percentage yet, a lit
+    cell scans along. Still when motion is reduced.
+    """
+    N = 12
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(18)
+        self.setToolTip("Your file is split into 12 encrypted pieces. Any 8 of them rebuild it.")
+        self._lit, self._scan, self._char = 0.0, False, "·"
+        import random
+        self._rng = random.Random()
+        self._tick = QVariantAnimation(self)
+        self._tick.setStartValue(0.0)
+        self._tick.setEndValue(1.0)
+        self._tick.setDuration(900)
+        self._tick.setLoopCount(-1)
+        self._tick.valueChanged.connect(self._frame)
+        self._step = -1
+
+    def set_progress(self, pct: int) -> None:
+        self._scan, self._lit = False, max(0.0, min(1.0, pct / 100)) * self.N
+        self._run(self._lit < self.N)
+
+    def scanning(self) -> None:
+        self._scan = True
+        self._run(True)
+
+    def _run(self, busy: bool) -> None:
+        if busy and self.isVisible() and not motion.reduced():
+            if self._tick.state() != QVariantAnimation.State.Running:
+                self._tick.start()
+        else:
+            self._tick.stop()
+        self.update()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        self._run(self._scan or self._lit < self.N)
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        self._tick.stop()
+
+    def _frame(self, v) -> None:
+        step = int(float(v) * 14)                        # a new digit ~15 times a second: busy, still readable
+        if step != self._step:
+            self._step = step
+            self._char = self._rng.choice(motion.HEX)
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        gap, h = 4.0, self.height() - 2.0
+        w = (self.width() - gap * (self.N - 1)) / self.N
+        neon = QLinearGradient(0, 0, self.width(), 0)    # one sweep of violet into mint across the whole row
+        neon.setColorAt(0.0, theme.qcolor("accent"))
+        neon.setColorAt(1.0, theme.qcolor("primary"))
+        moving = self._tick.state() == QVariantAnimation.State.Running
+        current = int(float(self._tick.currentValue() or 0.0) * self.N) if self._scan else int(self._lit)
+        f = QFont(self.font())
+        f.setFamily(theme.mono_family())
+        f.setPixelSize(10)
+        f.setBold(True)
+        p.setFont(f)
+        for i in range(self.N):
+            cell = QRectF(i * (w + gap), 1, w, h)
+            if not self._scan and i < int(self._lit):
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QBrush(neon))
+                p.drawRoundedRect(cell, 3, 3)
+            elif i == current and (self._scan or self._lit < self.N):
+                p.setPen(QPen(theme.qcolor("primary"), 1.2))
+                p.setBrush(theme.qcolor("primary_soft"))
+                p.drawRoundedRect(cell.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+                p.setPen(theme.qcolor("primary"))
+                p.drawText(cell, Qt.AlignmentFlag.AlignCenter, self._char if moving else "·")
+            else:
+                p.setPen(QPen(theme.qcolor("border_strong"), 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(cell.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+        p.end()
+
+
 class ProgressRing(QWidget):
     """A small ring that fills as steps get done, "1/3" in the middle: progress at a glance."""
 
@@ -1121,7 +1212,7 @@ class ProgressPanel(Card):
     """Title, live status text, progress bar and an optional cancel button."""
     cancel_clicked = pyqtSignal()
 
-    def __init__(self, parent=None, cancellable: bool = True):
+    def __init__(self, parent=None, cancellable: bool = True, pieces: bool = False):
         super().__init__(parent, padding=18, spacing=10)
         top = QHBoxLayout()
         self.title = label("", "h2", wrap=False)
@@ -1134,6 +1225,9 @@ class ProgressPanel(Card):
         self.bar = NeonBar()
         self.bar.setRange(0, 100)
         self.body.addWidget(self.bar)
+        self.shards = ShardStrip() if pieces else None     # the 12 pieces, for work that splits or rebuilds a file
+        if self.shards is not None:
+            self.body.addWidget(self.shards)
         row = QHBoxLayout()
         row.setSpacing(12)
         self.detail = label("", "muted")
@@ -1149,6 +1243,8 @@ class ProgressPanel(Card):
         self.detail.setText("")
         self.pct.setText("0%")
         self.pct.show()
+        if self.shards is not None:
+            self.shards.set_progress(0)
         self.bar.setRange(0, 100)
         motion.progress_to(self.bar, 0)
         self.cancel_btn.setEnabled(True)
@@ -1161,12 +1257,16 @@ class ProgressPanel(Card):
             self.bar.setRange(0, 100)
         self.pct.setText(f"{pct}%")
         self.pct.show()
+        if self.shards is not None:
+            self.shards.set_progress(pct)
         motion.progress_to(self.bar, pct)
 
     def indeterminate(self, text: str) -> None:
         self.detail.setText(text)
         self.pct.hide()                                   # no number to show
         self.bar.setRange(0, 0)
+        if self.shards is not None:
+            self.shards.scanning()
 
     def finish(self) -> None:
         self.hide()

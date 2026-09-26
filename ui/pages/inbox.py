@@ -75,7 +75,7 @@ class InboxPage(Page):
         tabs.addStretch()
         self.root.addLayout(tabs)
 
-        self.progress = ProgressPanel()
+        self.progress = ProgressPanel(pieces=True)
         self.progress.cancel_clicked.connect(self._cancel)
         self.root.addWidget(self.progress)
         self.result = Banner("", "success", "Show in folder", lambda: open_folder(self._last_path) if self._last_path else None)
@@ -369,6 +369,8 @@ class InboxPage(Page):
             text, kind = SENT_PILL.get(it["state"], (it["state"], "neutral"))
             when = datetime.datetime.fromtimestamp(it["created"]).strftime("%b %d, %H:%M")
             right = [Pill(text, kind)]
+            if it["state"] in ("uploading", "ready"):     # still on its way: a slow pulse, like a pending transaction
+                motion.breathe(right[0], True, 1800)
             li = QListWidgetItem()
             li.setSizeHint(QSize(0, 62))
             li.setData(Qt.ItemDataRole.UserRole, it)

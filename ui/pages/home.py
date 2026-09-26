@@ -145,14 +145,18 @@ class KeyChip(QPushButton):
         self.hide()
 
     def set_fingerprint(self, fp: str) -> None:
+        changed = fp != self._fp
         self._fp = fp
         groups = fp.split()
         self._short = f"{groups[0]} … {groups[-1]}" if len(groups) > 2 else fp
         self.setIcon(icons.icon("key", theme.color("primary"), 16))      # re-coloured on every refresh (theme)
-        self.setText(self._short)
         self.setToolTip("Your key fingerprint. Click to copy all of it, to read to someone who wants to verify you.")
         self.setAccessibleName(f"Your key fingerprint {fp}. Copy")
-        self.setVisible(bool(fp))
+        self.setVisible(bool(fp))                         # shown first, so the reveal below can play
+        if changed:
+            motion.scramble(self, self._short)            # your key resolves like a hash when it first appears
+        elif getattr(self, "_ansx_scramble", None) is None:
+            self.setText(self._short)
 
     def _copy(self) -> None:
         QApplication.clipboard().setText(self._fp)

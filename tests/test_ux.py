@@ -1067,3 +1067,58 @@ def test_the_inbox_switch_highlight_slides_to_the_chosen_side(signed_in):
     win.go("sent")
     pump(0.5)
     assert page._seg_pill.geometry() == page.tab_out.geometry()       # and ends under "Sent"
+
+
+@pytest.fixture
+def motion_on(monkeypatch):
+    from ui import motion
+    monkeypatch.delenv("ANSX_REDUCE_MOTION", raising=False)
+    monkeypatch.setattr(motion, "_system", False)
+    motion.set_reduced(False)
+    yield motion
+
+
+def test_a_fingerprint_resolves_like_a_hash_and_copy_takes_the_real_one(motion_on):
+    from ui.widgets import Fingerprint
+    fp = Fingerprint()
+    fp.show()
+    key = "C68AD634 A743A4D9 90D8B70C 74A437F3 97DA86D8 7337BD35 B0CD9C45 1498BCC4"
+    fp.set(key)
+    shown = fp.text.text()
+    final = "C68AD634 A743A4D9 90D8B70C 74A437F3\n97DA86D8 7337BD35 B0CD9C45 1498BCC4"
+    assert len(shown) == len(final) and [i for i, c in enumerate(shown) if c in " \n"] == \
+        [i for i, c in enumerate(final) if c in " \n"]                 # the layout never jumps
+    fp._copy()
+    assert QApplication.clipboard().text() == final                   # even mid-reveal
+    pump(0.9)
+    assert fp.text.text() == final
+
+
+def test_the_shard_strip_lights_one_piece_at_a_time(motion_on):
+    from ui.widgets import ShardStrip
+    s = ShardStrip()
+    s.resize(360, 18)
+    s.show()
+    running = s._tick.State.Running
+    s.set_progress(50)
+    assert int(s._lit) == 6 and s._tick.state() == running          # six of twelve pieces done, one being worked on
+    pump(0.1)
+    assert not s.grab().isNull()
+    s.set_progress(100)
+    assert s._tick.state() != running                                # all twelve: still
+    s.scanning()
+    assert s._tick.state() == running                                # no percentage yet: a lit cell scans along
+
+
+def test_transfers_still_on_their_way_pulse_in_the_sent_list(signed_in, motion_on):
+    from ui.widgets import Pill
+    ctl, win = signed_in
+    now = int(time.time())
+    ctl.outbox = [{"id": "o1", "to": "sam", "size": 10, "created": now, "state": "uploading"},
+                  {"id": "o2", "to": "alex", "size": 10, "created": now, "state": "delivered"}]
+    win.go("sent")
+    page = win.pages["inbox"]
+    page._fill_sent()
+    pills = {p.text(): p for p in page.sent_list.findChildren(Pill)}
+    assert pills["Uploading"]._ansx_breathe_anim is not None and getattr(pills["Delivered"], "_ansx_breathe_anim", None) is None
+    ctl.outbox = []

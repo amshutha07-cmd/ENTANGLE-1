@@ -261,6 +261,39 @@ def pulse(obj: QObject, prop: bytes, peak: float = 1.35, ms: int = SLOW) -> None
     anim.start()
 
 
+HEX = "0123456789ABCDEF"
+
+
+def scramble(w: QWidget, final: str, ms: int = 700) -> None:
+    """
+    Show `final` the way a hash resolves: every character flickers through random hex digits and they lock in
+    from left to right. Spaces, line breaks and "…" stay put, so a monospace layout never jumps. Plain setText
+    when motion is reduced or the widget is not on screen.
+    """
+    if reduced() or w is None or not w.isVisible() or not final:
+        old = getattr(w, "_ansx_scramble", None)
+        if old is not None:
+            old.stop()
+        w.setText(final)
+        return
+    import random
+    rng = random.Random()
+    anim = QVariantAnimation(w)
+    anim.setDuration(ms)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def frame(v) -> None:
+        k = int(float(v) * len(final))
+        w.setText(final[:k] + "".join(c if c in " \n…·" else rng.choice(HEX) for c in final[k:]))
+    anim.valueChanged.connect(frame)
+    anim.finished.connect(lambda: w.setText(final))
+    _keep(w, anim, "_ansx_scramble")
+    frame(0.0)                                        # scrambled at once, in the final layout: no stale frame
+    anim.start()
+
+
 def crossfade(w: QWidget, change: Callable[[], None], ms: int = SLOW) -> None:
     """
     Make a sweeping change (e.g. the theme) look like one smooth step: a picture of how `w` looked is laid over it,

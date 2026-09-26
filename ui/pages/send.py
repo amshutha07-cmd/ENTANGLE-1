@@ -97,7 +97,7 @@ class SendPage(Page):
         self.new_file_btn.setToolTip("Pick any file: it is protected first, then you choose who gets it")
         self.new_file_btn.clicked.connect(self._pick_new_file)
         l0.addWidget(self.new_file_btn, 0, Qt.AlignmentFlag.AlignLeft)
-        self.prep = ProgressPanel()                          # protecting a new file before sending it
+        self.prep = ProgressPanel(pieces=True)               # protecting a new file before sending it
         self.prep.cancel_clicked.connect(lambda: self._job is not None and self._job.cancel())
         l0.addWidget(self.prep)
         self.prep_error = Banner("", "danger")
@@ -183,7 +183,7 @@ class SendPage(Page):
         rl.addLayout(send_row)
         l2.addWidget(self.review)
 
-        self.progress = ProgressPanel()
+        self.progress = ProgressPanel(pieces=True)
         self.progress.cancel_clicked.connect(self._cancel)
         l2.addWidget(self.progress)
         self.error = Banner("", "danger")

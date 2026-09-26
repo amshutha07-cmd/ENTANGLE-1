@@ -80,7 +80,7 @@ class VaultPage(Page):
         self.drop.files_chosen.connect(self.protect_files)
         self.root.addWidget(self.drop)
 
-        self.progress = ProgressPanel()
+        self.progress = ProgressPanel(pieces=True)
         self.progress.cancel_clicked.connect(self._cancel)
         self.root.addWidget(self.progress)
 
